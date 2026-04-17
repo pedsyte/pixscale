@@ -215,7 +215,7 @@ main{padding:32px 0 80px}
   border-right:2px solid var(--amber);
 }
 .ba-after-img{
-  position:absolute;top:0;left:0;height:100%;width:auto;pointer-events:none;
+  position:absolute;top:0;left:0;max-width:none;pointer-events:none;
 }
 .ba-handle{
   position:absolute;top:0;bottom:0;left:50%;width:2px;
@@ -331,21 +331,26 @@ main{padding:32px 0 80px}
 .preset.active{background:var(--amber);color:#000;border-color:var(--amber)}
 
 .scale-buttons{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px}
+#panel-upscale2 .scale-buttons{grid-template-columns:repeat(4,1fr);gap:6px}
 .scale-btn,
-.strength-btn{
+.strength-btn,
+.scale-btn2{
   padding:14px 8px;border-radius:11px;border:1px solid var(--border);
   background:var(--bg-2);cursor:pointer;
   font-family:var(--font);transition:all 0.2s;color:var(--text);
   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
 }
 .scale-btn:hover,
-.strength-btn:hover{border-color:var(--teal)}
+.strength-btn:hover,
+.scale-btn2:hover{border-color:var(--teal)}
 .scale-btn.active,
-.strength-btn.active{background:linear-gradient(135deg, var(--teal), #0d9488);border-color:var(--teal);color:#fff;box-shadow:0 4px 14px var(--teal-glow)}
+.strength-btn.active,
+.scale-btn2.active{background:linear-gradient(135deg, var(--teal), #0d9488);border-color:var(--teal);color:#fff;box-shadow:0 4px 14px var(--teal-glow)}
 .scale-btn-x{font-size:1.05rem;font-weight:700;letter-spacing:-0.01em;line-height:1.15}
 .scale-btn-hint{font-size:0.68rem;color:var(--text-muted);margin-top:2px}
 .scale-btn.active .scale-btn-hint,
-.strength-btn.active .scale-btn-hint{color:rgba(255,255,255,0.85)}
+.strength-btn.active .scale-btn-hint,
+.scale-btn2.active .scale-btn-hint{color:rgba(255,255,255,0.85)}
 
 .select{
   width:100%;padding:10px 14px;
@@ -498,9 +503,10 @@ footer a:hover{text-decoration:underline}
                 <div class="side"><span class="dims" id="cmpAfterDims">—</span><span class="tag after">Стало</span></div>
               </div>
               <div class="ba-slider" id="baSlider">
-                <img class="ba-img" id="baBefore" alt="before">
+                <!-- Full background = "Стало" (результат), clipped overlay слева = "Было" -->
+                <img class="ba-img" id="baAfter" alt="after">
                 <div class="ba-after-clip" id="baAfterClip">
-                  <img class="ba-after-img" id="baAfter" alt="after">
+                  <img class="ba-after-img" id="baBefore" alt="before">
                 </div>
                 <div class="ba-handle" id="baHandle"></div>
                 <span class="ba-label before">Было</span>
@@ -544,6 +550,7 @@ footer a:hover{text-decoration:underline}
         <div class="tabs">
           <button class="tab active" data-tab="resize">📐 Ресайз</button>
           <button class="tab" data-tab="upscale">⚡ AI</button>
+          <button class="tab" data-tab="upscale2">🚀 Апскейл 2.0 <span style="font-size:0.6rem;background:var(--amber);color:#000;padding:1px 5px;border-radius:4px;margin-left:3px">β</span></button>
         </div>
 
         <!-- RESIZE PANEL -->
@@ -725,6 +732,76 @@ footer a:hover{text-decoration:underline}
             </div>
           </div>
         </div>
+
+        <!-- UPSCALE 2.0 β PANEL — multi-pass pipeline -->
+        <div class="panel" id="panel-upscale2">
+          <div style="background:linear-gradient(135deg, rgba(245,158,11,0.12), rgba(20,184,166,0.12));border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:16px;font-size:0.85rem;line-height:1.5">
+            <b style="color:var(--amber)">🚀 Апскейл 2.0 бета.</b> Multi-pass пайплайн:
+            денойз → SR проход 1 → повышение детализации (CLAHE) → SR проход 2 → финальная резкость.
+            Результат заметно сильнее чем обычный AI ×N, но и медленнее в 2-3 раза.
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Множитель</label>
+            <div class="scale-buttons">
+              <button class="scale-btn2" data-scale2="2" type="button">
+                <div class="scale-btn-x">×2</div>
+                <div class="scale-btn-hint">1 проход</div>
+              </button>
+              <button class="scale-btn2" data-scale2="3" type="button">
+                <div class="scale-btn-x">×3</div>
+                <div class="scale-btn-hint">1 проход</div>
+              </button>
+              <button class="scale-btn2 active" data-scale2="4" type="button">
+                <div class="scale-btn-x">×4</div>
+                <div class="scale-btn-hint">2×2</div>
+              </button>
+              <button class="scale-btn2" data-scale2="6" type="button">
+                <div class="scale-btn-x">×6</div>
+                <div class="scale-btn-hint">3×2 экстрим</div>
+              </button>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Денойз (перед SR)</label>
+            <select class="select" id="u2Denoise">
+              <option value="off">Выкл — для чистых фото</option>
+              <option value="auto" selected>Авто — если обнаружен шум</option>
+              <option value="strong">Сильно — для JPEG-артефактов</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Детализация на выходе</label>
+            <select class="select" id="u2Detail">
+              <option value="soft">Мягко — естественно</option>
+              <option value="medium" selected>Средне — сбалансировано</option>
+              <option value="hard">Жёстко — максимум резкости</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Формат вывода</label>
+            <select class="select" id="u2Fmt">
+              <option value="png">PNG (без потерь)</option>
+              <option value="jpg">JPG</option>
+              <option value="webp">WebP</option>
+            </select>
+          </div>
+
+          <div id="u2Preview" style="font-size:0.85rem;color:var(--text-dim);padding:10px 12px;background:var(--bg-2);border:1px solid var(--border);border-radius:9px;margin-bottom:12px">
+            Загрузи файл, чтобы увидеть размер результата
+          </div>
+
+          <button class="submit-btn teal" id="upscale2Btn" disabled>
+            <span>🚀 Запустить pipeline</span>
+          </button>
+
+          <div class="hint" style="color:var(--amber)">
+            ⚠ Может занять 10-40 сек в зависимости от размера исходника. Не закрывай вкладку.
+          </div>
+        </div>
       </aside>
 
     </div>
@@ -846,7 +923,11 @@ var resetBtn = document.getElementById('resetBtn');
 var mW = document.getElementById('mW'), mH = document.getElementById('mH'),
     mR = document.getElementById('mR'), mS = document.getElementById('mS');
 var tabs = document.querySelectorAll('.tab[data-tab]');
-var panels = { resize: document.getElementById('panel-resize'), upscale: document.getElementById('panel-upscale') };
+var panels = {
+  resize: document.getElementById('panel-resize'),
+  upscale: document.getElementById('panel-upscale'),
+  upscale2: document.getElementById('panel-upscale2'),
+};
 var rW = document.getElementById('rW'), rH = document.getElementById('rH');
 var ratioLock = document.getElementById('ratioLock');
 var ratioPresets = document.querySelectorAll('[data-ratio]');
@@ -888,10 +969,18 @@ var enhanceModelSel = document.getElementById('enhanceModelSel');
 var enhanceFmt = document.getElementById('enhanceFmt');
 var strengthBtns = document.querySelectorAll('.strength-btn');
 
+// Upscale 2.0 β
+var scale2Btns = document.querySelectorAll('.scale-btn2');
+var u2Denoise = document.getElementById('u2Denoise');
+var u2Detail = document.getElementById('u2Detail');
+var u2Fmt = document.getElementById('u2Fmt');
+var u2Preview = document.getElementById('u2Preview');
+var upscale2Btn = document.getElementById('upscale2Btn');
+
 // State
 var state = {
   token: null, width: 0, height: 0, ratio: 1,
-  currentImgUrl: null, scale: 2, strength: 'sharpen', locked: true,
+  currentImgUrl: null, scale: 2, strength: 'sharpen', scale2: 4, locked: true,
 };
 
 function showToast(msg, err){
@@ -906,9 +995,18 @@ function fmtBytes(n){
   return (n/1024/1024).toFixed(2)+' MB';
 }
 function updateUpscalePreview(){
-  if(!state.token){ upscalePreview.textContent = 'Загрузи файл, чтобы увидеть размер результата'; return; }
+  if(!state.token){
+    upscalePreview.textContent = 'Загрузи файл, чтобы увидеть размер результата';
+    if(u2Preview) u2Preview.textContent = 'Загрузи файл, чтобы увидеть размер результата';
+    return;
+  }
   var w = state.width * state.scale, h = state.height * state.scale;
   upscalePreview.innerHTML = 'Результат: <b style="color:var(--text)">'+w+' × '+h+'</b> px ('+(w*h/1e6).toFixed(1)+' MP)';
+  var w2 = state.width * state.scale2, h2 = state.height * state.scale2;
+  if(u2Preview){
+    u2Preview.innerHTML = 'Результат: <b style="color:var(--text)">'+w2+' × '+h2+'</b> px ('+(w2*h2/1e6).toFixed(1)+' MP) · ~'+
+      (state.scale2 >= 4 ? '20-40 сек' : '5-15 сек');
+  }
 }
 
 /* ===== UPLOAD ===== */
@@ -965,6 +1063,7 @@ function upload(file){
       resizeBtn.disabled = false;
       upscaleBtn.disabled = false;
       enhanceBtn.disabled = false;
+      upscale2Btn.disabled = false;
       updateUpscalePreview();
 
       resultBlock.classList.remove('active');
@@ -986,6 +1085,7 @@ function resetAll(){
   resizeBtn.disabled = true;
   upscaleBtn.disabled = true;
   enhanceBtn.disabled = true;
+  upscale2Btn.disabled = true;
   rW.value = ''; rH.value = '';
 }
 resetBtn.addEventListener('click', resetAll);
@@ -1155,6 +1255,40 @@ enhanceBtn.addEventListener('click', function(){
     .finally(function(){ setBusy(enhanceBtn, false, '✨ Улучшить качество'); });
 });
 
+/* ===== UPSCALE 2.0 β ===== */
+scale2Btns.forEach(function(b){
+  b.addEventListener('click', function(){
+    scale2Btns.forEach(function(x){ x.classList.remove('active'); });
+    this.classList.add('active');
+    state.scale2 = parseInt(this.dataset.scale2, 10);
+    updateUpscalePreview();
+  });
+});
+
+upscale2Btn.addEventListener('click', function(){
+  if(!state.token) return;
+
+  var fd = new FormData();
+  fd.append('token', state.token);
+  fd.append('scale', state.scale2);
+  fd.append('denoise', u2Denoise.value);
+  fd.append('detail', u2Detail.value);
+  fd.append('fmt', u2Fmt.value);
+
+  clog('info','upscale2_submit',{scale:state.scale2,denoise:u2Denoise.value,detail:u2Detail.value,fmt:u2Fmt.value});
+  setBusy(upscale2Btn, true);
+  showToast('Multi-pass pipeline… это займёт до 40 секунд');
+
+  fetch('/api/upscale2', {method:'POST', body:fd})
+    .then(function(r){ if(!r.ok) return r.json().then(function(j){ throw new Error(j.detail||j.error||'upscale2 failed'); }); return r.json(); })
+    .then(function(j){
+      clog('info','upscale2_ok',{w:j.width,h:j.height,scale:j.scale,bytes:j.size_bytes,pipeline:j.pipeline});
+      showResult(j, 'Апскейл 2.0 ×'+j.scale+' · pipeline: '+(j.pipeline||[]).join(' → '));
+    })
+    .catch(function(e){ clog('error','upscale2_fail',{msg:e.message}); showToast(e.message, true); })
+    .finally(function(){ setBusy(upscale2Btn, false, '🚀 Запустить pipeline'); });
+});
+
 /* ===== RESULT / COMPARE (slider) ===== */
 function showResult(j, title){
   resultBlock.classList.add('active');
@@ -1188,9 +1322,12 @@ function setHandle(ratio){
   var pct = (ratio*100)+'%';
   baHandle.style.left = pct;
   baAfterClip.style.width = pct;
-  // Чтобы "after" совпал попиксельно с "before" — подгоняем ширину по slider
+  // Обе картинки во весь слайдер — чтобы совпадали попиксельно
   var sw = baSlider.clientWidth;
-  if(sw){ baAfter.style.width = sw + 'px'; baAfter.style.height = 'auto'; }
+  if(sw){
+    baAfter.style.width = sw + 'px'; baAfter.style.height = 'auto';
+    baBefore.style.width = sw + 'px'; baBefore.style.height = 'auto';
+  }
 }
 
 function onBaMove(e){

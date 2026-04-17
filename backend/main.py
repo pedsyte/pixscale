@@ -424,6 +424,128 @@ async def upscale_endpoint(
     }
 
 
+@app.post("/api/upscale2")
+async def upscale2_endpoint(
+    token: str = Form(...),
+    scale: int = Form(4),               # 2 | 3 | 4 | 6
+    denoise: str = Form("auto"),        # off | auto | strong
+    detail: str = Form("medium"),       # soft | medium | hard
+    fmt: str = Form("png"),
+    quality: int = Form(92),
+):
+    """Апскейл 2.0 β — multi-pass pipeline.
+
+    Идея: последовательное применение нескольких операций даёт заметно
+    более выраженный результат, чем один проход SR:
+
+      1. опциональный bilateral-денойз (убирает JPEG-шум, сохраняет края)
+      2. 1-й проход SR (FSRCNN ×2) с тайлами
+      3. "detail enhance" — CLAHE на LAB-L канале + UnsharpMask
+      4. 2-й проход SR (если итоговый scale > 2): FSRCNN ×2 или ×3
+      5. финальная резкость + мягкий unsharp
+
+    scale=2 — один проход SR ×2;
+    scale=3 — один проход SR ×3;
+    scale=4 — два прохода SR ×2  (FSRCNN ×2 ×2)
+    scale=6 — два прохода (×3 → ×2)
+    """
+    from PIL import ImageFilter
+
+    if scale not in (2, 3, 4, 6):
+        raise HTTPException(400, "scale must be 2, 3, 4 or 6")
+
+    img = _load_upload(token)
+    orig_w, orig_h = img.size
+    out_w, out_h = orig_w * scale, orig_h * scale
+    if out_w * out_h > MAX_OUT_PIXELS:
+        raise HTTPException(400, f"Результат {out_w}×{out_h} слишком большой (> {MAX_OUT_PIXELS/1e6:.0f} MP)")
+
+    log.info("upscale2 token=%s src=%dx%d scale=%d denoise=%s detail=%s", token, orig_w, orig_h, scale, denoise, detail)
+    t0 = time.perf_counter()
+
+    try:
+        bgr = _pil_to_bgr(img)
+
+        # 1. Pre-denoise
+        if denoise == "strong":
+            bgr = cv2.bilateralFilter(bgr, d=9, sigmaColor=45, sigmaSpace=45)
+        elif denoise == "auto":
+            # лёгкий денойз только если есть заметный шум
+            gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+            noise_est = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+            # эмпирический порог — сильно шумные фото имеют высокую дисперсию лапласиана
+            if noise_est > 500:
+                bgr = cv2.bilateralFilter(bgr, d=7, sigmaColor=30, sigmaSpace=30)
+                log.info("upscale2 auto-denoise applied (lap var=%.0f)", noise_est)
+
+        # 2. SR pass 1 + optional pass 2
+        passes: list[tuple[str, int]] = {
+            2: [("fsrcnn", 2)],
+            3: [("fsrcnn", 3)],
+            4: [("fsrcnn", 2), ("fsrcnn", 2)],
+            6: [("fsrcnn", 3), ("fsrcnn", 2)],
+        }[scale]
+
+        for i, (m, s) in enumerate(passes, 1):
+            t_pass = time.perf_counter()
+            bgr = _tiled_upsample(bgr, m, s)
+            log.info("upscale2 pass %d: %s x%d in %.1fs → %dx%d",
+                     i, m, s, time.perf_counter() - t_pass, bgr.shape[1], bgr.shape[0])
+
+            # между проходами — мягкое повышение детализации, иначе второй проход
+            # будет «доедать» сглаженное изображение и терять резкость
+            if i < len(passes):
+                lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+                l, a, b_ch = cv2.split(lab)
+                clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
+                l = clahe.apply(l)
+                bgr = cv2.cvtColor(cv2.merge([l, a, b_ch]), cv2.COLOR_LAB2BGR)
+
+        # 3. Финальный detail enhance
+        if detail != "soft":
+            lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+            l, a, b_ch = cv2.split(lab)
+            clip = 1.8 if detail == "medium" else 2.5
+            clahe = cv2.createCLAHE(clipLimit=clip, tileGridSize=(8, 8))
+            l = clahe.apply(l)
+            bgr = cv2.cvtColor(cv2.merge([l, a, b_ch]), cv2.COLOR_LAB2BGR)
+
+        # 4. Финальная резкость
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        pil_final = Image.fromarray(rgb)
+        unsharp_params = {
+            "soft":   (1.0,  60, 2),
+            "medium": (1.2, 110, 2),
+            "hard":   (1.5, 160, 2),
+        }[detail]
+        r_u, p_u, t_u = unsharp_params
+        pil_final = pil_final.filter(ImageFilter.UnsharpMask(radius=r_u, percent=p_u, threshold=t_u))
+
+        final_bgr = _pil_to_bgr(pil_final)
+
+    except MemoryError:
+        raise HTTPException(507, "Не хватило памяти. Попробуй меньший scale или более маленький исходник.")
+    except Exception as e:
+        log.exception("upscale2 failed")
+        raise HTTPException(500, f"upscale2 failed: {e}")
+
+    out = _save_output(final_bgr, fmt, quality)
+    log.info("upscale2 ok %dx%d total %.1fs → %s (%d bytes)",
+             final_bgr.shape[1], final_bgr.shape[0], time.perf_counter() - t0, out.name, out.stat().st_size)
+    return {
+        "ok": True,
+        "file": out.name,
+        "url": f"/api/download/{out.name}",
+        "width": int(final_bgr.shape[1]),
+        "height": int(final_bgr.shape[0]),
+        "size_bytes": out.stat().st_size,
+        "scale": scale,
+        "denoise": denoise,
+        "detail": detail,
+        "pipeline": [f"{m}x{s}" for m, s in passes],
+    }
+
+
 @app.post("/api/enhance")
 async def enhance_endpoint(
     token: str = Form(...),
