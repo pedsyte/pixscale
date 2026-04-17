@@ -185,41 +185,68 @@ main{padding:32px 0 80px}
 }
 .dl-btn:hover{transform:translateY(-1px);box-shadow:0 6px 20px var(--teal-glow)}
 
-/* Before/After side-by-side comparison */
-.compare{
-  display:grid;grid-template-columns:1fr 1fr;gap:14px;
+/* Before/After slider (draggable) + size readouts */
+.compare-wrap{
   background:var(--bg-2);border-radius:var(--radius-sm);padding:14px;
 }
-@media (max-width:720px){.compare{grid-template-columns:1fr}}
-.compare-cell{
-  display:flex;flex-direction:column;gap:8px;min-width:0;
-}
-.compare-head{
-  display:flex;align-items:center;justify-content:space-between;gap:8px;
+.ba-meta{
+  display:flex;justify-content:space-between;align-items:center;
   font-family:var(--mono);font-size:0.72rem;font-weight:600;letter-spacing:0.1em;
-  text-transform:uppercase;
+  text-transform:uppercase;margin-bottom:10px;gap:10px;
 }
-.compare-tag{padding:3px 9px;border-radius:6px;color:#fff;background:rgba(0,0,0,0.55)}
-.compare-tag.after{background:var(--amber);color:#000}
-.compare-dims{color:var(--text-dim);font-size:0.7rem;letter-spacing:0.05em}
-.compare-box{
-  position:relative;border-radius:10px;overflow:hidden;
+.ba-meta .side{display:flex;align-items:center;gap:8px;min-width:0}
+.ba-meta .tag{padding:3px 9px;border-radius:6px;color:#fff;background:rgba(0,0,0,0.55);flex-shrink:0}
+.ba-meta .tag.after{background:var(--amber);color:#000}
+.ba-meta .dims{color:var(--text-dim);font-size:0.7rem;font-weight:500;letter-spacing:0.03em;text-transform:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+.ba-slider{
+  position:relative;overflow:hidden;border-radius:10px;
+  cursor:ew-resize;user-select:none;
   background:
     linear-gradient(45deg, #1a1f2a 25%, transparent 25%),
     linear-gradient(-45deg, #1a1f2a 25%, transparent 25%),
     linear-gradient(45deg, transparent 75%, #1a1f2a 75%),
     linear-gradient(-45deg, transparent 75%, #1a1f2a 75%);
-  background-size:20px 20px;background-position:0 0, 0 10px, 10px -10px, -10px 0;
-  min-height:220px;max-height:420px;
+  background-size:20px 20px;background-position:0 0,0 10px,10px -10px,-10px 0;
+}
+.ba-img{display:block;width:100%;max-height:520px;object-fit:contain;pointer-events:none}
+.ba-after-clip{
+  position:absolute;inset:0;width:50%;overflow:hidden;
+  border-right:2px solid var(--amber);
+}
+.ba-after-img{
+  position:absolute;top:0;left:0;height:100%;width:auto;pointer-events:none;
+}
+.ba-handle{
+  position:absolute;top:0;bottom:0;left:50%;width:2px;
+  background:var(--amber);transform:translateX(-50%);
+  box-shadow:0 0 20px var(--amber-glow);pointer-events:none;
+}
+.ba-handle::after{
+  content:'⇔';position:absolute;top:50%;left:50%;
+  transform:translate(-50%,-50%);
+  width:40px;height:40px;border-radius:50%;
+  background:var(--amber);color:#000;font-weight:700;font-size:1rem;
   display:flex;align-items:center;justify-content:center;
-  cursor:zoom-in;
+  box-shadow:0 4px 16px var(--amber-glow);
 }
-.compare-box img{display:block;max-width:100%;max-height:420px;object-fit:contain}
-.compare-hint{
-  font-size:0.72rem;color:var(--text-dim);text-align:center;
-  margin-top:10px;
+.ba-label{
+  position:absolute;top:12px;padding:4px 10px;border-radius:6px;
+  font-family:var(--mono);font-size:0.7rem;font-weight:600;letter-spacing:0.1em;
+  text-transform:uppercase;color:#fff;pointer-events:none;
 }
-.compare-hint b{color:var(--amber)}
+.ba-label.before{left:12px;background:rgba(0,0,0,0.65)}
+.ba-label.after{right:12px;background:var(--amber);color:#000}
+
+.compare-actions{
+  display:flex;justify-content:center;gap:10px;margin-top:12px;flex-wrap:wrap;
+}
+.compare-actions button{
+  background:var(--bg-2);border:1px solid var(--border);color:var(--text-dim);
+  padding:7px 14px;border-radius:8px;font-family:var(--font);font-size:0.8rem;
+  cursor:pointer;transition:all 0.15s;
+}
+.compare-actions button:hover{color:var(--text);border-color:var(--amber);color:var(--amber)}
 
 /* 100% zoom lightbox */
 .zoom-overlay{
@@ -460,27 +487,22 @@ footer a:hover{text-decoration:underline}
               <span class="result-title" id="resultTitle">Готово</span>
             </div>
 
-            <div class="compare" id="compareBlock" style="display:none">
-              <div class="compare-cell">
-                <div class="compare-head">
-                  <span class="compare-tag">Было</span>
-                  <span class="compare-dims" id="cmpBeforeDims">—</span>
-                </div>
-                <div class="compare-box" id="cmpBeforeBox">
-                  <img id="cmpBefore" alt="before">
-                </div>
+            <div class="compare-wrap" id="compareBlock" style="display:none">
+              <div class="ba-meta">
+                <div class="side"><span class="tag">Было</span><span class="dims" id="cmpBeforeDims">—</span></div>
+                <div class="side"><span class="dims" id="cmpAfterDims">—</span><span class="tag after">Стало</span></div>
               </div>
-              <div class="compare-cell">
-                <div class="compare-head">
-                  <span class="compare-tag after">Стало</span>
-                  <span class="compare-dims" id="cmpAfterDims">—</span>
+              <div class="ba-slider" id="baSlider">
+                <img class="ba-img" id="baBefore" alt="before">
+                <div class="ba-after-clip" id="baAfterClip">
+                  <img class="ba-after-img" id="baAfter" alt="after">
                 </div>
-                <div class="compare-box" id="cmpAfterBox">
-                  <img id="cmpAfter" alt="after">
-                </div>
+                <div class="ba-handle" id="baHandle"></div>
+                <span class="ba-label before">Было</span>
+                <span class="ba-label after">Стало</span>
               </div>
-              <div class="compare-hint" style="grid-column:1/-1">
-                💡 Клик по любому изображению — <b>зум 100%</b> (настоящее качество попиксельно). Для полного результата — <b>скачай файл</b>.
+              <div class="compare-actions">
+                <button type="button" id="zoomBtn">🔍 Зум 100% попиксельно</button>
               </div>
             </div>
 
@@ -516,7 +538,7 @@ footer a:hover{text-decoration:underline}
       <aside class="controls">
         <div class="tabs">
           <button class="tab active" data-tab="resize">📐 Ресайз</button>
-          <button class="tab" data-tab="upscale">⚡ AI Upscale</button>
+          <button class="tab" data-tab="upscale">⚡ AI</button>
         </div>
 
         <!-- RESIZE PANEL -->
@@ -592,52 +614,110 @@ footer a:hover{text-decoration:underline}
 
         <!-- UPSCALE PANEL -->
         <div class="panel" id="panel-upscale">
-          <div class="form-group">
-            <label class="form-label">Множитель увеличения</label>
-            <div class="scale-buttons">
-              <button class="scale-btn active" data-scale="2">
-                <div class="scale-btn-x">×2</div>
-                <div class="scale-btn-hint">быстро</div>
-              </button>
-              <button class="scale-btn" data-scale="3">
-                <div class="scale-btn-x">×3</div>
-                <div class="scale-btn-hint">средне</div>
-              </button>
-              <button class="scale-btn" data-scale="4">
-                <div class="scale-btn-x">×4</div>
-                <div class="scale-btn-hint">макс.</div>
-              </button>
+          <!-- Sub-tabs: Enlarge vs Enhance -->
+          <div class="tabs" style="margin-bottom:16px">
+            <button class="tab ai-sub active" data-aimode="enlarge" type="button">🔼 Увеличить</button>
+            <button class="tab ai-sub" data-aimode="enhance" type="button">✨ Улучшить</button>
+          </div>
+
+          <!-- ENLARGE sub-panel -->
+          <div class="ai-panel active" id="ai-enlarge">
+            <div class="form-group">
+              <label class="form-label">Множитель увеличения</label>
+              <div class="scale-buttons">
+                <button class="scale-btn active" data-scale="2" type="button">
+                  <div class="scale-btn-x">×2</div>
+                  <div class="scale-btn-hint">быстро</div>
+                </button>
+                <button class="scale-btn" data-scale="3" type="button">
+                  <div class="scale-btn-x">×3</div>
+                  <div class="scale-btn-hint">средне</div>
+                </button>
+                <button class="scale-btn" data-scale="4" type="button">
+                  <div class="scale-btn-x">×4</div>
+                  <div class="scale-btn-hint">макс.</div>
+                </button>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">AI модель</label>
+              <select class="select" id="modelSel">
+                <option value="fsrcnn">FSRCNN · быстрый</option>
+                <option value="espcn">ESPCN · сбалансированный</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Формат вывода</label>
+              <select class="select" id="upscaleFmt">
+                <option value="png">PNG (без потерь)</option>
+                <option value="jpg">JPG</option>
+                <option value="webp">WebP</option>
+              </select>
+            </div>
+
+            <div id="upscalePreview" style="font-size:0.85rem;color:var(--text-dim);padding:10px 12px;background:var(--bg-2);border:1px solid var(--border);border-radius:9px;margin-bottom:12px">
+              Загрузи файл, чтобы увидеть размер результата
+            </div>
+
+            <button class="submit-btn teal" id="upscaleBtn" disabled>
+              <span>🔼 Увеличить разрешение</span>
+            </button>
+
+            <div class="hint">
+              Нейросеть восстанавливает детали при увеличении. Размер изображения становится больше в ×2/×3/×4 раза.
             </div>
           </div>
 
-          <div class="form-group">
-            <label class="form-label">AI модель</label>
-            <select class="select" id="modelSel">
-              <option value="fsrcnn">FSRCNN · быстрый (5-15 сек)</option>
-              <option value="espcn">ESPCN · сбалансированный</option>
-              <option value="edsr">EDSR · лучшее качество (медленно)</option>
-            </select>
-          </div>
+          <!-- ENHANCE sub-panel -->
+          <div class="ai-panel" id="ai-enhance" style="display:none">
+            <div class="form-group">
+              <label class="form-label">Сила улучшения</label>
+              <div class="scale-buttons">
+                <button class="strength-btn" data-strength="light" type="button">
+                  <div class="scale-btn-x">Лайт</div>
+                  <div class="scale-btn-hint">мягко</div>
+                </button>
+                <button class="strength-btn active" data-strength="medium" type="button">
+                  <div class="scale-btn-x">Средне</div>
+                  <div class="scale-btn-hint">+резкость</div>
+                </button>
+                <button class="strength-btn" data-strength="strong" type="button">
+                  <div class="scale-btn-x">Мощно</div>
+                  <div class="scale-btn-hint">медленно</div>
+                </button>
+              </div>
+            </div>
 
-          <div class="form-group">
-            <label class="form-label">Формат вывода</label>
-            <select class="select" id="upscaleFmt">
-              <option value="png">PNG (без потерь)</option>
-              <option value="jpg">JPG</option>
-              <option value="webp">WebP</option>
-            </select>
-          </div>
+            <div class="form-group">
+              <label class="form-label">AI модель</label>
+              <select class="select" id="enhanceModelSel">
+                <option value="fsrcnn">FSRCNN · быстрый</option>
+                <option value="espcn">ESPCN · качественнее</option>
+              </select>
+            </div>
 
-          <div id="upscalePreview" style="font-size:0.85rem;color:var(--text-dim);padding:10px 12px;background:var(--bg-2);border:1px solid var(--border);border-radius:9px;margin-bottom:12px">
-            Загрузи файл, чтобы увидеть размер результата
-          </div>
+            <div class="form-group">
+              <label class="form-label">Формат вывода</label>
+              <select class="select" id="enhanceFmt">
+                <option value="png">PNG (без потерь)</option>
+                <option value="jpg">JPG</option>
+                <option value="webp">WebP</option>
+              </select>
+            </div>
 
-          <button class="submit-btn teal" id="upscaleBtn" disabled>
-            <span>⚡ Увеличить разрешение</span>
-          </button>
+            <div style="font-size:0.85rem;color:var(--text-dim);padding:10px 12px;background:var(--bg-2);border:1px solid var(--border);border-radius:9px;margin-bottom:12px">
+              Размер <b style="color:var(--text)">останется тем же</b>. Нейросеть восстановит детали, уберёт шум и добавит резкости.
+            </div>
 
-          <div class="hint">
-            Super-resolution восстанавливает детали, которые обычный ресайз теряет. Для фото — <b>EDSR</b>, для быстрого — <b>FSRCNN</b>.
+            <button class="submit-btn teal" id="enhanceBtn" disabled>
+              <span>✨ Улучшить качество</span>
+            </button>
+
+            <div class="hint">
+              Работает по схеме «AI-апскейл → даунскейл Lanczos'ом»: сеть восстанавливает детали, обратный ресайз убирает шум. Финал — то же разрешение, но чище и чётче.
+            </div>
           </div>
         </div>
       </aside>
@@ -709,12 +789,14 @@ var upscalePreview = document.getElementById('upscalePreview');
 var resultBlock = document.getElementById('resultBlock');
 var resultTitle = document.getElementById('resultTitle');
 var compareBlock = document.getElementById('compareBlock');
-var cmpBefore = document.getElementById('cmpBefore');
-var cmpAfter = document.getElementById('cmpAfter');
+var baSlider = document.getElementById('baSlider');
+var baBefore = document.getElementById('baBefore');
+var baAfter = document.getElementById('baAfter');
+var baAfterClip = document.getElementById('baAfterClip');
+var baHandle = document.getElementById('baHandle');
 var cmpBeforeDims = document.getElementById('cmpBeforeDims');
 var cmpAfterDims = document.getElementById('cmpAfterDims');
-var cmpBeforeBox = document.getElementById('cmpBeforeBox');
-var cmpAfterBox = document.getElementById('cmpAfterBox');
+var zoomBtn = document.getElementById('zoomBtn');
 var zoomOverlay = document.getElementById('zoomOverlay');
 var zoomBefore = document.getElementById('zoomBefore');
 var zoomAfter = document.getElementById('zoomAfter');
@@ -724,10 +806,19 @@ var resDims = document.getElementById('resDims');
 var resSize = document.getElementById('resSize');
 var toast = document.getElementById('toast');
 
+// AI sub-tabs
+var aiSubTabs = document.querySelectorAll('.ai-sub');
+var aiPanelEnlarge = document.getElementById('ai-enlarge');
+var aiPanelEnhance = document.getElementById('ai-enhance');
+var enhanceBtn = document.getElementById('enhanceBtn');
+var enhanceModelSel = document.getElementById('enhanceModelSel');
+var enhanceFmt = document.getElementById('enhanceFmt');
+var strengthBtns = document.querySelectorAll('.strength-btn');
+
 // State
 var state = {
   token: null, width: 0, height: 0, ratio: 1,
-  currentImgUrl: null, scale: 2, locked: true,
+  currentImgUrl: null, scale: 2, strength: 'medium', locked: true,
 };
 
 function showToast(msg, err){
@@ -798,6 +889,7 @@ function upload(file){
       rH.value = j.height;
       resizeBtn.disabled = false;
       upscaleBtn.disabled = false;
+      enhanceBtn.disabled = false;
       updateUpscalePreview();
 
       resultBlock.classList.remove('active');
@@ -818,6 +910,7 @@ function resetAll(){
   fileInput.value = '';
   resizeBtn.disabled = true;
   upscaleBtn.disabled = true;
+  enhanceBtn.disabled = true;
   rW.value = ''; rH.value = '';
 }
 resetBtn.addEventListener('click', resetAll);
@@ -886,6 +979,26 @@ scaleBtns.forEach(function(b){
   });
 });
 
+/* ===== ENHANCE form ===== */
+strengthBtns.forEach(function(b){
+  b.addEventListener('click', function(){
+    strengthBtns.forEach(function(x){ x.classList.remove('active'); });
+    this.classList.add('active');
+    state.strength = this.dataset.strength;
+  });
+});
+
+/* ===== AI sub-tabs switching ===== */
+aiSubTabs.forEach(function(t){
+  t.addEventListener('click', function(){
+    aiSubTabs.forEach(function(x){ x.classList.remove('active'); });
+    this.classList.add('active');
+    var mode = this.dataset.aimode;
+    aiPanelEnlarge.style.display = (mode === 'enlarge') ? '' : 'none';
+    aiPanelEnhance.style.display = (mode === 'enhance') ? '' : 'none';
+  });
+});
+
 /* ===== SUBMIT ===== */
 function setBusy(btn, busy, label){
   btn.disabled = busy;
@@ -925,44 +1038,89 @@ upscaleBtn.addEventListener('click', function(){
   fd.append('fmt', upscaleFmt.value);
 
   setBusy(upscaleBtn, true);
-  showToast('AI обрабатывает изображение, это займёт 5–60 секунд…');
+  showToast('AI увеличивает разрешение…');
 
   fetch('/api/upscale', {method:'POST', body:fd})
     .then(function(r){ if(!r.ok) return r.json().then(function(j){ throw new Error(j.detail||'upscale failed'); }); return r.json(); })
     .then(function(j){ showResult(j, 'Увеличено ×'+j.scale+' ('+j.model.toUpperCase()+')'); })
     .catch(function(e){ showToast(e.message, true); })
-    .finally(function(){ setBusy(upscaleBtn, false, '⚡ Увеличить разрешение'); });
+    .finally(function(){ setBusy(upscaleBtn, false, '🔼 Увеличить разрешение'); });
 });
 
-/* ===== RESULT / COMPARE ===== */
+enhanceBtn.addEventListener('click', function(){
+  if(!state.token) return;
+
+  var fd = new FormData();
+  fd.append('token', state.token);
+  fd.append('model', enhanceModelSel.value);
+  fd.append('strength', state.strength);
+  fd.append('fmt', enhanceFmt.value);
+
+  setBusy(enhanceBtn, true);
+  showToast('AI улучшает качество…');
+
+  fetch('/api/enhance', {method:'POST', body:fd})
+    .then(function(r){ if(!r.ok) return r.json().then(function(j){ throw new Error(j.detail||'enhance failed'); }); return r.json(); })
+    .then(function(j){ showResult(j, 'Качество улучшено ('+j.model.toUpperCase()+', '+j.strength+')'); })
+    .catch(function(e){ showToast(e.message, true); })
+    .finally(function(){ setBusy(enhanceBtn, false, '✨ Улучшить качество'); });
+});
+
+/* ===== RESULT / COMPARE (slider) ===== */
 function showResult(j, title){
   resultBlock.classList.add('active');
   resultTitle.textContent = title;
   resDims.textContent = j.width + ' × ' + j.height + ' px';
   resSize.textContent = fmtBytes(j.size_bytes);
-  dlBtn.href = j.url;
+
+  // Download link: absolute URL чтобы клик reliably triggered download
+  var absUrl = (j.url && j.url[0] === '/') ? (location.origin + j.url) : j.url;
+  dlBtn.href = absUrl;
   dlBtn.setAttribute('download', j.file);
 
-  // Side-by-side compare (before = original uploaded, after = processed)
-  cmpBefore.src = state.currentImgUrl;
-  cmpAfter.src = j.url;
+  // Slider: both images displayed at same CSS size (fit into container)
+  baBefore.src = state.currentImgUrl;
+  baAfter.src = absUrl;
   cmpBeforeDims.textContent = state.width + '×' + state.height + ' · ' + fmtBytes(state.sizeBytes||0);
   cmpAfterDims.textContent = j.width + '×' + j.height + ' · ' + fmtBytes(j.size_bytes);
-  compareBlock.style.display = 'grid';
+  compareBlock.style.display = 'block';
 
   // 100% zoom sources
   zoomBefore.src = state.currentImgUrl;
-  zoomAfter.src = j.url;
+  zoomAfter.src = absUrl;
 
-  // Ensure download works: if j.url is relative, make absolute (защита от edge cases)
-  if(j.url && j.url[0] === '/'){
-    dlBtn.href = location.origin + j.url;
-  }
+  // Reset handle to middle, align after-img size to slider width
+  baAfter.onload = function(){ setHandle(0.5); };
+  setHandle(0.5);
 }
 
-// Click-to-zoom 100%
+function setHandle(ratio){
+  ratio = Math.max(0, Math.min(1, ratio));
+  var pct = (ratio*100)+'%';
+  baHandle.style.left = pct;
+  baAfterClip.style.width = pct;
+  // Чтобы "after" совпал попиксельно с "before" — подгоняем ширину по slider
+  var sw = baSlider.clientWidth;
+  if(sw){ baAfter.style.width = sw + 'px'; baAfter.style.height = 'auto'; }
+}
+
+function onBaMove(e){
+  var rect = baSlider.getBoundingClientRect();
+  var x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+  setHandle(x / rect.width);
+}
+var baDragging = false;
+baSlider.addEventListener('mousedown', function(e){ baDragging = true; onBaMove(e); e.preventDefault(); });
+window.addEventListener('mousemove', function(e){ if(baDragging) onBaMove(e); });
+window.addEventListener('mouseup', function(){ baDragging = false; });
+baSlider.addEventListener('touchstart', function(e){ baDragging = true; onBaMove(e); }, {passive:true});
+baSlider.addEventListener('touchmove', function(e){ if(baDragging) onBaMove(e); }, {passive:true});
+baSlider.addEventListener('touchend', function(){ baDragging = false; });
+window.addEventListener('resize', function(){ if(compareBlock.style.display==='block') setHandle(0.5); });
+
+// Zoom lightbox
 function openZoom(){
-  if(!cmpAfter.src) return;
+  if(!zoomAfter.src) return;
   zoomOverlay.classList.add('show');
   document.body.style.overflow = 'hidden';
 }
@@ -970,8 +1128,7 @@ function closeZoom(){
   zoomOverlay.classList.remove('show');
   document.body.style.overflow = '';
 }
-cmpBeforeBox.addEventListener('click', openZoom);
-cmpAfterBox.addEventListener('click', openZoom);
+if(zoomBtn) zoomBtn.addEventListener('click', openZoom);
 zoomClose.addEventListener('click', closeZoom);
 zoomOverlay.addEventListener('click', function(e){
   if(e.target === zoomOverlay) closeZoom();

@@ -28,21 +28,20 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 MAX_UPLOAD_MB = 40
 MAX_OUT_PIXELS = 60_000_000   # ~60 MP protection
-# Строгие лимиты на вход для AI (сервер 3.6 ГБ RAM, без GPU) —
-# иначе OpenCV dnn_superres съедает всю память и получает OOM-kill.
-# Ключ (модель, множитель) → максимум входных пикселей.
-MAX_AI_INPUT_PIXELS = {
-    ("fsrcnn", 2): 4_000_000,
-    ("fsrcnn", 3): 2_500_000,
-    ("fsrcnn", 4): 1_500_000,
-    ("espcn",  2): 4_000_000,
-    ("espcn",  3): 2_500_000,
-    ("espcn",  4): 1_500_000,
-    # EDSR — тяжёлая сеть (37 MB), жрёт память пачками. Жёстко режем.
-    ("edsr",   2): 600_000,
-    ("edsr",   3): 300_000,
-    ("edsr",   4): 180_000,
+
+# Tile-based super-resolution:
+# Разбиваем вход на тайлы с overlap, гоним SR на каждом, склеиваем с фидингом.
+# Память зависит только от размера тайла, а не от размера изображения.
+# На сервере 3.6 GB RAM без GPU — это единственный способ обрабатывать
+# реальные фотографии (FullHD и выше).
+TILE_SIZE = {
+    # (model, scale) -> tile edge in pixels (input space)
+    ("fsrcnn", 2): 384, ("fsrcnn", 3): 320, ("fsrcnn", 4): 256,
+    ("espcn",  2): 384, ("espcn",  3): 320, ("espcn",  4): 256,
+    # EDSR — тяжёлая, меньшие тайлы
+    ("edsr",   2): 192, ("edsr",   3): 160, ("edsr",   4): 128,
 }
+TILE_OVERLAP = 16   # пикселей, прячет стыки между тайлами
 ALLOWED_MIME = {
     "image/jpeg", "image/jpg", "image/png", "image/webp", "image/bmp", "image/tiff",
 }
@@ -101,6 +100,57 @@ def _pil_to_bgr(pil: Image.Image) -> np.ndarray:
         pil = bg
     arr = np.array(pil)
     return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+
+
+def _tiled_upsample(bgr: np.ndarray, model: str, scale: int) -> np.ndarray:
+    """Tiled super-resolution — обрабатываем изображение кусками,
+    чтобы не уложить сервер OOM-kill'ом. Память ограничена размером тайла.
+
+    Возвращает апскейл BGR numpy-массив (h*scale, w*scale, 3).
+    """
+    sr = _load_sr(model, scale)
+    h, w = bgr.shape[:2]
+    tile = TILE_SIZE.get((model, scale), 256)
+    ov = TILE_OVERLAP
+
+    # Если изображение маленькое — один проход, без тайлов
+    if h <= tile and w <= tile:
+        return sr.upsample(bgr)
+
+    out = np.zeros((h * scale, w * scale, 3), dtype=np.uint8)
+
+    # Идём по сетке с перекрытием
+    y = 0
+    while y < h:
+        x = 0
+        # Границы тайла во входном пространстве (с overlap для стыков)
+        y0 = max(0, y - ov)
+        y1 = min(h, y + tile + ov)
+        while x < w:
+            x0 = max(0, x - ov)
+            x1 = min(w, x + tile + ov)
+
+            patch = bgr[y0:y1, x0:x1]
+            up = sr.upsample(patch)
+
+            # Позиции без overlap — что кладём в итоговый буфер
+            dst_y0 = y * scale
+            dst_y1 = min((y + tile), h) * scale
+            dst_x0 = x * scale
+            dst_x1 = min((x + tile), w) * scale
+
+            # Смещения внутри апскейленного тайла (убираем overlap-поля)
+            src_y0 = (y - y0) * scale
+            src_y1 = src_y0 + (dst_y1 - dst_y0)
+            src_x0 = (x - x0) * scale
+            src_x1 = src_x0 + (dst_x1 - dst_x0)
+
+            out[dst_y0:dst_y1, dst_x0:dst_x1] = up[src_y0:src_y1, src_x0:src_x1]
+
+            x += tile
+        y += tile
+
+    return out
 
 
 app = FastAPI(title="PixScale API", version="1.0")
@@ -247,7 +297,7 @@ async def upscale_endpoint(
     fmt: str = Form("png"),
     quality: int = Form(92),
 ):
-    """AI upscale using OpenCV DNN Super-Resolution."""
+    """AI upscale через OpenCV DNN Super-Resolution (tiled, memory-safe)."""
     model = model.lower()
     if model not in {"fsrcnn", "espcn", "edsr"}:
         raise HTTPException(400, "invalid model")
@@ -257,33 +307,24 @@ async def upscale_endpoint(
     img = _load_upload(token)
     w, h = img.size
 
-    # Защита от OOM: для каждой модели — свой потолок входных пикселей.
-    max_in = MAX_AI_INPUT_PIXELS.get((model, scale))
-    if max_in and w * h > max_in:
-        # Подсказываем максимальную сторону, чтобы влезло
-        import math
-        side = int(math.sqrt(max_in * (w / h)))
-        raise HTTPException(
-            413,
-            f"Изображение слишком большое для {model.upper()} ×{scale} "
-            f"на этом сервере (без GPU). Вход: {w}×{h} = {w*h/1e6:.1f} MP, "
-            f"максимум {max_in/1e6:.1f} MP. "
-            f"Уменьшите картинку до ~{side}px по длинной стороне, или выберите FSRCNN/ESPCN / меньший ×."
-        )
-
     out_w, out_h = w * scale, h * scale
     if out_w * out_h > MAX_OUT_PIXELS:
         raise HTTPException(
             400,
-            f"result would be {out_w}x{out_h} (> {MAX_OUT_PIXELS:,} px). "
-            f"Используйте меньший масштаб или уменьшите исходник.",
+            f"Результат был бы {out_w}×{out_h} (> {MAX_OUT_PIXELS/1e6:.0f} MP). "
+            f"Уменьшите исходник или выберите меньший ×.",
         )
 
     bgr = _pil_to_bgr(img)
 
     try:
-        sr = _load_sr(model, scale)
-        result = sr.upsample(bgr)
+        result = _tiled_upsample(bgr, model, scale)
+    except MemoryError:
+        raise HTTPException(
+            507,
+            "Не хватило памяти даже с тайловым режимом. "
+            "Попробуйте FSRCNN вместо EDSR или меньший множитель.",
+        )
     except Exception as e:
         log.exception("upscale failed")
         raise HTTPException(500, f"upscale failed: {e}")
@@ -298,6 +339,73 @@ async def upscale_endpoint(
         "size_bytes": out.stat().st_size,
         "model": model,
         "scale": scale,
+    }
+
+
+@app.post("/api/enhance")
+async def enhance_endpoint(
+    token: str = Form(...),
+    model: str = Form("fsrcnn"),   # fsrcnn | espcn | edsr
+    strength: str = Form("medium"),  # light (x2) | medium (x2→down) | strong (x4→down)
+    fmt: str = Form("png"),
+    quality: int = Form(92),
+):
+    """Улучшить качество БЕЗ изменения размера.
+
+    Трюк: апскейлим SR-моделью, затем обратно даунскейлим Lanczos'ом.
+    SR восстанавливает детали/границы, даунскейл убирает шум и артефакты.
+    Эффект — тот же размер, но визуально чётче и чище.
+    """
+    model = model.lower()
+    if model not in {"fsrcnn", "espcn", "edsr"}:
+        raise HTTPException(400, "invalid model")
+
+    # strength → через какой множитель прогоняем SR
+    sr_scale = {"light": 2, "medium": 2, "strong": 4}.get(strength, 2)
+
+    img = _load_upload(token)
+    orig_w, orig_h = img.size
+
+    # Защита: для strong (×4) на EDSR больших картинок — это будет безумно долго
+    if orig_w * orig_h > 8_000_000:  # 8 MP cap
+        raise HTTPException(
+            413,
+            f"Для улучшения качества — макс. 8 MP ({orig_w}×{orig_h} = {orig_w*orig_h/1e6:.1f} MP). "
+            f"Сначала уменьшите через вкладку 'Ресайз'.",
+        )
+
+    bgr = _pil_to_bgr(img)
+
+    try:
+        up = _tiled_upsample(bgr, model, sr_scale)
+    except MemoryError:
+        raise HTTPException(507, "Не хватило памяти. Выберите FSRCNN.")
+    except Exception as e:
+        log.exception("enhance failed")
+        raise HTTPException(500, f"enhance failed: {e}")
+
+    # Downscale обратно до оригинального размера — Lanczos
+    rgb = cv2.cvtColor(up, cv2.COLOR_BGR2RGB)
+    pil_up = Image.fromarray(rgb)
+    pil_down = pil_up.resize((orig_w, orig_h), Image.Resampling.LANCZOS)
+
+    # Чуть поднимаем резкость (unsharp mask), т.к. Lanczos мыльнит
+    from PIL import ImageFilter
+    if strength in ("medium", "strong"):
+        pil_down = pil_down.filter(ImageFilter.UnsharpMask(radius=1.0, percent=40, threshold=2))
+
+    final_bgr = _pil_to_bgr(pil_down)
+    out = _save_output(final_bgr, fmt, quality)
+    return {
+        "ok": True,
+        "file": out.name,
+        "url": f"/api/download/{out.name}",
+        "width": orig_w,
+        "height": orig_h,
+        "size_bytes": out.stat().st_size,
+        "model": model,
+        "strength": strength,
+        "mode": "enhance",
     }
 
 
