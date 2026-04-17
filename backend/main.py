@@ -4,27 +4,46 @@ FastAPI backend. OpenCV DNN SuperRes (EDSR/ESPCN/FSRCNN) + Pillow Lanczos.
 """
 import io
 import os
+import time
+import json
 import uuid
 import logging
+import traceback
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
 
 import cv2
 import numpy as np
 from PIL import Image, ImageOps
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-log = logging.getLogger("pixscale")
 
 BASE = Path(__file__).parent.parent
 UPLOAD_DIR = BASE / "uploads"
 OUTPUT_DIR = BASE / "outputs"
 MODELS_DIR = BASE / "models"
+LOGS_DIR = BASE / "logs"
 UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
+LOGS_DIR.mkdir(exist_ok=True)
+
+# ── Логирование ──────────────────────────────────────────────────────────
+# Пишем в файл /opt/pixscale/logs/pixscale.log (ротация 5 × 2 МБ)
+# и в stdout (systemd journal).  Формат включает уровень и миллисекунды.
+_fmt = logging.Formatter(
+    "%(asctime)s.%(msecs)03d %(levelname)s %(name)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+_file_h = RotatingFileHandler(LOGS_DIR / "pixscale.log", maxBytes=2_000_000, backupCount=5, encoding="utf-8")
+_file_h.setFormatter(_fmt)
+_stream_h = logging.StreamHandler()
+_stream_h.setFormatter(_fmt)
+
+logging.basicConfig(level=logging.INFO, handlers=[_file_h, _stream_h], force=True)
+log = logging.getLogger("pixscale")
+client_log = logging.getLogger("pixscale.client")
 
 MAX_UPLOAD_MB = 40
 MAX_OUT_PIXELS = 60_000_000   # ~60 MP protection
@@ -162,6 +181,64 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Логируем КАЖДЫЙ запрос: метод, путь, статус, длительность, IP."""
+    start = time.perf_counter()
+    rid = uuid.uuid4().hex[:8]
+    ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "?").split(",")[0].strip()
+    request.state.rid = rid
+
+    log.info("→ %s %s %s %s", rid, ip, request.method, request.url.path)
+    try:
+        response = await call_next(request)
+    except Exception:
+        dt = (time.perf_counter() - start) * 1000
+        log.exception("✗ %s crashed after %.0fms", rid, dt)
+        return JSONResponse({"ok": False, "error": "internal server error", "rid": rid}, status_code=500)
+    dt = (time.perf_counter() - start) * 1000
+    level = logging.WARNING if response.status_code >= 400 else logging.INFO
+    log.log(level, "← %s %d %.0fms %s", rid, response.status_code, dt, request.url.path)
+    response.headers["X-Request-ID"] = rid
+    return response
+
+
+@app.exception_handler(HTTPException)
+async def http_exc_handler(request: Request, exc: HTTPException):
+    log.warning("HTTPException %s %s → %d: %s", request.method, request.url.path, exc.status_code, exc.detail)
+    return JSONResponse({"ok": False, "error": exc.detail, "status": exc.status_code}, status_code=exc.status_code)
+
+
+@app.post("/api/client-log")
+async def client_log_endpoint(request: Request):
+    """Принимает логи от браузера: ошибки, действия пользователя, состояние.
+
+    Поле `level` — info|warn|error, `event` — короткий код, `data` — произвольный объект.
+    Пишем в тот же файл, чтобы можно было tail-ом видеть связку клиент↔сервер.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    level = str(body.get("level", "info")).lower()
+    event = str(body.get("event", "client"))[:60]
+    data = body.get("data")
+    ua = request.headers.get("user-agent", "?")[:140]
+    ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "?").split(",")[0].strip()
+    try:
+        data_str = json.dumps(data, ensure_ascii=False, default=str)[:1500]
+    except Exception:
+        data_str = str(data)[:1500]
+    msg = f"[CLIENT] ip={ip} ua={ua!r} event={event} data={data_str}"
+    if level == "error":
+        client_log.error(msg)
+    elif level in ("warn", "warning"):
+        client_log.warning(msg)
+    else:
+        client_log.info(msg)
+    return {"ok": True}
+
+
 @app.get("/api/health")
 def health():
     return {"ok": True, "models": sorted({p.stem for p in MODELS_DIR.glob("*.pb")})}
@@ -200,6 +277,7 @@ async def analyze(file: UploadFile = File(...)):
     tmp_name = f"in_{uuid.uuid4().hex[:12]}.{(img.format or 'png').lower()}"
     tmp_path = UPLOAD_DIR / tmp_name
     img.save(tmp_path)
+    log.info("analyze ok size=%dx%d bytes=%d fmt=%s token=%s", w, h, len(data), img.format, tmp_name)
     return {
         "token": tmp_name,
         "width": w,
@@ -274,6 +352,7 @@ async def resize_endpoint(
     elif img.mode not in ("RGB", "RGBA", "L"):
         img = img.convert("RGB")
 
+    log.info("resize token=%s %dx%d→%dx%d filter=%s fmt=%s", token, orig_w, orig_h, width, height, resample, fmt)
     resized = img.resize((width, height), r_filter)
 
     # save
@@ -315,7 +394,9 @@ async def upscale_endpoint(
             f"Уменьшите исходник или выберите меньший ×.",
         )
 
+    log.info("upscale token=%s src=%dx%d model=%s x%d → %dx%d", token, w, h, model, scale, out_w, out_h)
     bgr = _pil_to_bgr(img)
+    t0 = time.perf_counter()
 
     try:
         result = _tiled_upsample(bgr, model, scale)
@@ -326,10 +407,11 @@ async def upscale_endpoint(
             "Попробуйте FSRCNN вместо EDSR или меньший множитель.",
         )
     except Exception as e:
-        log.exception("upscale failed")
+        log.exception("upscale failed token=%s model=%s x%d", token, model, scale)
         raise HTTPException(500, f"upscale failed: {e}")
 
     out = _save_output(result, fmt, quality)
+    log.info("upscale ok %dx%d in %.1fs → %s (%d bytes)", result.shape[1], result.shape[0], time.perf_counter()-t0, out.name, out.stat().st_size)
     return {
         "ok": True,
         "file": out.name,
@@ -375,6 +457,8 @@ async def enhance_endpoint(
     if strength not in ("sharpen", "denoise", "ai"):
         # обратная совместимость со старыми значениями
         strength = {"light": "sharpen", "medium": "denoise", "strong": "ai"}.get(strength, "denoise")
+    log.info("enhance token=%s %dx%d mode=%s model=%s", token, orig_w, orig_h, strength, model)
+    t0 = time.perf_counter()
 
     pil = img
     if pil.mode not in ("RGB", "RGBA"):
@@ -420,6 +504,7 @@ async def enhance_endpoint(
 
     final_bgr = _pil_to_bgr(result_pil)
     out = _save_output(final_bgr, fmt, quality)
+    log.info("enhance ok mode=%s in %.1fs → %s (%d bytes)", strength, time.perf_counter()-t0, out.name, out.stat().st_size)
     return {
         "ok": True,
         "file": out.name,

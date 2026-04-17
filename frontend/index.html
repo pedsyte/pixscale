@@ -767,6 +767,74 @@ footer a:hover{text-decoration:underline}
 (function(){
 'use strict';
 
+// ── Клиентское логирование ─────────────────────────────────────────────
+// Все действия и ошибки отправляются на /api/client-log, чтобы их можно
+// было видеть на сервере вместе с бэкенд-логами (tail -f logs/pixscale.log).
+var SESSION_ID = Math.random().toString(36).slice(2, 10);
+function clog(level, event, data){
+  try {
+    var payload = {
+      level: level, event: event,
+      data: Object.assign({ sid: SESSION_ID, url: location.pathname, ts: Date.now() }, data || {})
+    };
+    // используем keepalive чтобы логи уходили даже при unload
+    fetch('/api/client-log', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload),
+      keepalive: true
+    }).catch(function(){});
+  } catch(e) {}
+}
+window.clog = clog;
+
+// JS ошибки
+window.addEventListener('error', function(e){
+  clog('error', 'js_error', {
+    msg: e.message, src: e.filename, line: e.lineno, col: e.colno,
+    stack: e.error && e.error.stack ? String(e.error.stack).slice(0, 1200) : null
+  });
+});
+// необработанные промисы
+window.addEventListener('unhandledrejection', function(e){
+  var r = e.reason || {};
+  clog('error', 'promise_rejection', {
+    msg: r.message || String(r), stack: r.stack ? String(r.stack).slice(0,1200) : null
+  });
+});
+// ошибки загрузки изображений
+document.addEventListener('error', function(e){
+  var t = e.target;
+  if (t && (t.tagName === 'IMG' || t.tagName === 'SCRIPT' || t.tagName === 'LINK')) {
+    clog('warn', 'resource_error', { tag: t.tagName, src: t.src || t.href });
+  }
+}, true);
+
+// Оборачиваем fetch, чтобы логировать все запросы и их ошибки
+var _origFetch = window.fetch.bind(window);
+window.fetch = function(input, init){
+  var url = typeof input === 'string' ? input : (input && input.url) || '?';
+  var method = (init && init.method) || 'GET';
+  // собственные логи не логируем чтобы не зациклиться
+  var silent = url.indexOf('/api/client-log') !== -1;
+  var t0 = performance.now();
+  if (!silent) clog('info', 'fetch_start', { url: url, method: method });
+  return _origFetch(input, init).then(function(resp){
+    var dt = Math.round(performance.now() - t0);
+    if (!silent) {
+      var lvl = resp.ok ? 'info' : 'warn';
+      clog(lvl, 'fetch_done', { url: url, status: resp.status, ok: resp.ok, ms: dt });
+    }
+    return resp;
+  }).catch(function(err){
+    var dt = Math.round(performance.now() - t0);
+    if (!silent) clog('error', 'fetch_fail', { url: url, ms: dt, msg: err && err.message });
+    throw err;
+  });
+};
+
+clog('info', 'page_load', { ua: navigator.userAgent, vw: innerWidth, vh: innerHeight });
+
 // Elements
 var dz = document.getElementById('dropzone');
 var pickBtn = document.getElementById('pickBtn');
@@ -859,20 +927,22 @@ dz.addEventListener('drop', function(e){
 });
 
 function upload(file){
-  if(!file.type.startsWith('image/')){ showToast('Это не изображение', true); return; }
-  if(file.size > 40*1024*1024){ showToast('Файл больше 40 MB', true); return; }
+  if(!file.type.startsWith('image/')){ showToast('Это не изображение', true); clog('warn','upload_rejected',{reason:'not_image', type:file.type}); return; }
+  if(file.size > 40*1024*1024){ showToast('Файл больше 40 MB', true); clog('warn','upload_rejected',{reason:'too_big', size:file.size}); return; }
 
+  clog('info','upload_start',{name:file.name, size:file.size, type:file.type});
   var fd = new FormData();
   fd.append('file', file);
 
   dz.innerHTML = '<div class="spinner" style="border-color:rgba(245,158,11,0.3);border-top-color:var(--amber);width:42px;height:42px"></div><div class="dz-title">Загружаю…</div>';
 
   fetch('/api/analyze', {method:'POST', body:fd})
-    .then(function(r){ if(!r.ok) return r.json().then(function(j){ throw new Error(j.detail||'upload failed'); }); return r.json(); })
+    .then(function(r){ if(!r.ok) return r.json().then(function(j){ throw new Error(j.detail||j.error||'upload failed'); }); return r.json(); })
     .then(function(j){
       state.token = j.token;
       state.width = j.width; state.height = j.height; state.ratio = j.ratio;
       state.sizeBytes = j.size_bytes;
+      clog('info','upload_ok',{token:j.token, w:j.width, h:j.height});
 
       // show preview
       var reader = new FileReader();
@@ -926,6 +996,7 @@ tabs.forEach(function(t){
     tabs.forEach(function(x){ x.classList.remove('active'); });
     this.classList.add('active');
     var key = this.dataset.tab;
+    clog('info','tab_switch',{tab:key});
     Object.keys(panels).forEach(function(k){ panels[k].classList.toggle('active', k===key); });
   });
 });
@@ -1008,6 +1079,7 @@ aiSubTabs.forEach(function(t){
     aiSubTabs.forEach(function(x){ x.classList.remove('active'); });
     this.classList.add('active');
     var mode = this.dataset.aimode;
+    clog('info','ai_subtab_switch',{mode:mode});
     aiPanelEnlarge.style.display = (mode === 'enlarge') ? '' : 'none';
     aiPanelEnhance.style.display = (mode === 'enhance') ? '' : 'none';
   });
@@ -1024,7 +1096,7 @@ function setBusy(btn, busy, label){
 resizeBtn.addEventListener('click', function(){
   if(!state.token) return;
   var w = parseInt(rW.value,10), h = parseInt(rH.value,10);
-  if(!w || !h || w<1 || h<1){ showToast('Введи ширину и высоту', true); return; }
+  if(!w || !h || w<1 || h<1){ showToast('Введи ширину и высоту', true); clog('warn','resize_invalid',{w:w,h:h}); return; }
 
   var fd = new FormData();
   fd.append('token', state.token);
@@ -1034,11 +1106,12 @@ resizeBtn.addEventListener('click', function(){
   fd.append('fmt', resizeFmt.value);
   fd.append('resample', resample.value);
 
+  clog('info','resize_submit',{w:w,h:h,fmt:resizeFmt.value,resample:resample.value,locked:state.locked});
   setBusy(resizeBtn, true);
   fetch('/api/resize', {method:'POST', body:fd})
-    .then(function(r){ if(!r.ok) return r.json().then(function(j){ throw new Error(j.detail||'resize failed'); }); return r.json(); })
-    .then(function(j){ showResult(j, 'Ресайз готов'); })
-    .catch(function(e){ showToast(e.message, true); })
+    .then(function(r){ if(!r.ok) return r.json().then(function(j){ throw new Error(j.detail||j.error||'resize failed'); }); return r.json(); })
+    .then(function(j){ clog('info','resize_ok',{w:j.width,h:j.height,bytes:j.size_bytes}); showResult(j, 'Ресайз готов'); })
+    .catch(function(e){ clog('error','resize_fail',{msg:e.message}); showToast(e.message, true); })
     .finally(function(){ setBusy(resizeBtn, false, '📐 Изменить размер'); });
 });
 
@@ -1051,13 +1124,14 @@ upscaleBtn.addEventListener('click', function(){
   fd.append('scale', state.scale);
   fd.append('fmt', upscaleFmt.value);
 
+  clog('info','upscale_submit',{model:modelSel.value,scale:state.scale,fmt:upscaleFmt.value});
   setBusy(upscaleBtn, true);
   showToast('AI увеличивает разрешение…');
 
   fetch('/api/upscale', {method:'POST', body:fd})
-    .then(function(r){ if(!r.ok) return r.json().then(function(j){ throw new Error(j.detail||'upscale failed'); }); return r.json(); })
-    .then(function(j){ showResult(j, 'Увеличено ×'+j.scale+' ('+j.model.toUpperCase()+')'); })
-    .catch(function(e){ showToast(e.message, true); })
+    .then(function(r){ if(!r.ok) return r.json().then(function(j){ throw new Error(j.detail||j.error||'upscale failed'); }); return r.json(); })
+    .then(function(j){ clog('info','upscale_ok',{w:j.width,h:j.height,model:j.model,scale:j.scale,bytes:j.size_bytes}); showResult(j, 'Увеличено ×'+j.scale+' ('+j.model.toUpperCase()+')'); })
+    .catch(function(e){ clog('error','upscale_fail',{msg:e.message}); showToast(e.message, true); })
     .finally(function(){ setBusy(upscaleBtn, false, '🔼 Увеличить разрешение'); });
 });
 
@@ -1070,13 +1144,14 @@ enhanceBtn.addEventListener('click', function(){
   fd.append('strength', state.strength);
   fd.append('fmt', enhanceFmt.value);
 
+  clog('info','enhance_submit',{strength:state.strength,model:enhanceModelSel.value,fmt:enhanceFmt.value});
   setBusy(enhanceBtn, true);
   showToast('AI улучшает качество…');
 
   fetch('/api/enhance', {method:'POST', body:fd})
-    .then(function(r){ if(!r.ok) return r.json().then(function(j){ throw new Error(j.detail||'enhance failed'); }); return r.json(); })
-    .then(function(j){ showResult(j, 'Качество улучшено ('+j.model.toUpperCase()+', '+j.strength+')'); })
-    .catch(function(e){ showToast(e.message, true); })
+    .then(function(r){ if(!r.ok) return r.json().then(function(j){ throw new Error(j.detail||j.error||'enhance failed'); }); return r.json(); })
+    .then(function(j){ clog('info','enhance_ok',{mode:j.mode,bytes:j.size_bytes}); showResult(j, 'Качество улучшено ('+(j.mode||state.strength)+')'); })
+    .catch(function(e){ clog('error','enhance_fail',{msg:e.message}); showToast(e.message, true); })
     .finally(function(){ setBusy(enhanceBtn, false, '✨ Улучшить качество'); });
 });
 
