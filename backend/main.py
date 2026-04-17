@@ -28,6 +28,21 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 MAX_UPLOAD_MB = 40
 MAX_OUT_PIXELS = 60_000_000   # ~60 MP protection
+# Строгие лимиты на вход для AI (сервер 3.6 ГБ RAM, без GPU) —
+# иначе OpenCV dnn_superres съедает всю память и получает OOM-kill.
+# Ключ (модель, множитель) → максимум входных пикселей.
+MAX_AI_INPUT_PIXELS = {
+    ("fsrcnn", 2): 4_000_000,
+    ("fsrcnn", 3): 2_500_000,
+    ("fsrcnn", 4): 1_500_000,
+    ("espcn",  2): 4_000_000,
+    ("espcn",  3): 2_500_000,
+    ("espcn",  4): 1_500_000,
+    # EDSR — тяжёлая сеть (37 MB), жрёт память пачками. Жёстко режем.
+    ("edsr",   2): 600_000,
+    ("edsr",   3): 300_000,
+    ("edsr",   4): 180_000,
+}
 ALLOWED_MIME = {
     "image/jpeg", "image/jpg", "image/png", "image/webp", "image/bmp", "image/tiff",
 }
@@ -241,6 +256,20 @@ async def upscale_endpoint(
 
     img = _load_upload(token)
     w, h = img.size
+
+    # Защита от OOM: для каждой модели — свой потолок входных пикселей.
+    max_in = MAX_AI_INPUT_PIXELS.get((model, scale))
+    if max_in and w * h > max_in:
+        # Подсказываем максимальную сторону, чтобы влезло
+        import math
+        side = int(math.sqrt(max_in * (w / h)))
+        raise HTTPException(
+            413,
+            f"Изображение слишком большое для {model.upper()} ×{scale} "
+            f"на этом сервере (без GPU). Вход: {w}×{h} = {w*h/1e6:.1f} MP, "
+            f"максимум {max_in/1e6:.1f} MP. "
+            f"Уменьшите картинку до ~{side}px по длинной стороне, или выберите FSRCNN/ESPCN / меньший ×."
+        )
 
     out_w, out_h = w * scale, h * scale
     if out_w * out_h > MAX_OUT_PIXELS:
