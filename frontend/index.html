@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PixScale — AI апскейл и ресайз изображений</title>
+<meta name="description" content="Изменяй размер изображений и увеличивай разрешение без потери качества. AI super-resolution + Lanczos. Бесплатно, без регистрации.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0a0d10;
+  --bg-2:#10141a;
+  --surface:#141920;
+  --surface-2:#1a212a;
+  --border:#252f3a;
+  --border-hov:#3a4a5c;
+  --text:#e8eef5;
+  --text-dim:#8a9aad;
+  --text-muted:#556472;
+  --amber:#f59e0b;
+  --amber-glow:rgba(245,158,11,0.25);
+  --teal:#14b8a6;
+  --teal-glow:rgba(20,184,166,0.25);
+  --red:#ef4444;
+  --green:#10b981;
+  --radius:14px;
+  --radius-sm:10px;
+  --font:'DM Sans', system-ui, -apple-system, sans-serif;
+  --mono:'JetBrains Mono', monospace;
+}
+html{scroll-behavior:smooth}
+body{
+  font-family:var(--font);
+  background:var(--bg);
+  color:var(--text);
+  min-height:100vh;
+  -webkit-font-smoothing:antialiased;
+  line-height:1.5;
+  overflow-x:hidden;
+}
+
+/* Subtle teal+amber glow background */
+body::before{
+  content:'';position:fixed;inset:0;z-index:-1;pointer-events:none;
+  background:
+    radial-gradient(ellipse 80% 50% at 20% 0%, rgba(20,184,166,0.06), transparent),
+    radial-gradient(ellipse 60% 40% at 90% 100%, rgba(245,158,11,0.04), transparent);
+}
+body::after{
+  content:'';position:fixed;inset:0;z-index:-1;pointer-events:none;
+  background-image:
+    linear-gradient(rgba(60,80,100,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(60,80,100,0.03) 1px, transparent 1px);
+  background-size:48px 48px;
+  mask-image:radial-gradient(ellipse at center, black 40%, transparent 85%);
+}
+
+.container{max-width:1280px;margin:0 auto;padding:0 24px}
+
+/* ===== HEADER ===== */
+header{padding:22px 0;border-bottom:1px solid var(--border);background:rgba(10,13,16,0.85);backdrop-filter:blur(12px);position:sticky;top:0;z-index:50}
+.nav{display:flex;align-items:center;justify-content:space-between;gap:24px}
+.brand{display:flex;align-items:center;gap:12px;cursor:pointer}
+.logo{
+  width:40px;height:40px;border-radius:11px;
+  background:linear-gradient(135deg, var(--amber) 0%, var(--teal) 100%);
+  display:flex;align-items:center;justify-content:center;
+  font-size:1.35rem;
+  box-shadow:0 6px 24px rgba(245,158,11,0.25);
+  position:relative;
+}
+.logo::after{content:'';position:absolute;inset:1px;border-radius:10px;background:linear-gradient(135deg, rgba(255,255,255,0.15), transparent 60%);pointer-events:none}
+.brand-text{display:flex;flex-direction:column;line-height:1}
+.brand-name{font-size:1.15rem;font-weight:700;letter-spacing:-0.01em}
+.brand-tag{font-size:0.68rem;font-family:var(--mono);color:var(--text-muted);letter-spacing:0.14em;text-transform:uppercase;margin-top:3px}
+.nav-right{display:flex;align-items:center;gap:14px}
+.home-link{font-size:0.82rem;color:var(--text-dim);text-decoration:none;padding:8px 12px;border-radius:9px;border:1px solid var(--border);transition:all 0.2s}
+.home-link:hover{color:var(--text);border-color:var(--border-hov)}
+
+/* ===== HERO ===== */
+.hero{padding:44px 0 28px;text-align:center}
+.hero h1{
+  font-size:clamp(1.8rem,4vw,2.8rem);
+  font-weight:700;letter-spacing:-0.03em;line-height:1.1;
+  margin-bottom:14px;
+}
+.hero h1 span{
+  background:linear-gradient(90deg, var(--amber), var(--teal));
+  -webkit-background-clip:text;background-clip:text;
+  -webkit-text-fill-color:transparent;
+}
+.hero p{max-width:640px;margin:0 auto;color:var(--text-dim);font-size:1rem}
+.hero-chips{display:flex;gap:8px;justify-content:center;margin-top:22px;flex-wrap:wrap}
+.hero-chip{
+  font-family:var(--mono);font-size:0.75rem;
+  padding:6px 12px;border-radius:100px;
+  background:var(--surface);border:1px solid var(--border);color:var(--text-dim);
+}
+.hero-chip.amber{color:#fbbf24;border-color:rgba(245,158,11,0.3)}
+.hero-chip.teal{color:#5eead4;border-color:rgba(20,184,166,0.3)}
+
+/* ===== MAIN APP ===== */
+main{padding:32px 0 80px}
+.app-grid{display:grid;grid-template-columns:1fr 380px;gap:24px;align-items:start}
+@media (max-width:1024px){.app-grid{grid-template-columns:1fr}}
+
+/* DROPZONE */
+.dropzone{
+  background:var(--surface);border:2px dashed var(--border);
+  border-radius:var(--radius);padding:48px 24px;text-align:center;
+  transition:all 0.25s;cursor:pointer;min-height:360px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
+}
+.dropzone:hover,.dropzone.drag-over{
+  border-color:var(--amber);background:var(--surface-2);
+  box-shadow:0 0 0 4px var(--amber-glow);
+}
+.dz-icon{
+  width:72px;height:72px;border-radius:20px;
+  background:linear-gradient(135deg, rgba(245,158,11,0.15), rgba(20,184,166,0.1));
+  border:1px solid rgba(245,158,11,0.3);
+  display:flex;align-items:center;justify-content:center;
+  font-size:2rem;
+}
+.dz-title{font-size:1.15rem;font-weight:600}
+.dz-sub{color:var(--text-dim);font-size:0.88rem}
+.dz-btn{
+  margin-top:8px;padding:10px 20px;border-radius:10px;border:none;cursor:pointer;
+  background:linear-gradient(135deg, var(--amber), #d97706);color:#fff;font-weight:600;
+  font-size:0.9rem;font-family:var(--font);transition:transform 0.2s, box-shadow 0.2s;
+}
+.dz-btn:hover{transform:translateY(-1px);box-shadow:0 6px 20px var(--amber-glow)}
+
+/* PREVIEW */
+.preview{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  padding:20px;display:none;
+}
+.preview.active{display:block}
+.preview-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+.preview-filename{font-family:var(--mono);font-size:0.85rem;color:var(--text-dim);word-break:break-all}
+.preview-reset{
+  padding:6px 14px;border-radius:8px;border:1px solid var(--border);
+  background:transparent;color:var(--text-dim);cursor:pointer;font-size:0.82rem;
+  font-family:var(--font);transition:all 0.2s;
+}
+.preview-reset:hover{color:var(--red);border-color:var(--red)}
+
+.preview-compare{
+  position:relative;overflow:hidden;border-radius:var(--radius-sm);
+  background:repeating-conic-gradient(#1a2028 0% 25%, #10151b 0% 50%) 50%/20px 20px;
+  min-height:280px;display:flex;align-items:center;justify-content:center;
+}
+.preview-img{max-width:100%;max-height:520px;display:block}
+
+.preview-meta{
+  display:grid;grid-template-columns:repeat(auto-fit, minmax(120px, 1fr));
+  gap:10px;margin-top:14px;
+}
+.meta-cell{
+  background:var(--surface-2);border:1px solid var(--border);
+  border-radius:8px;padding:10px 12px;
+}
+.meta-label{font-size:0.7rem;font-family:var(--mono);color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em}
+.meta-val{font-size:0.95rem;font-weight:600;color:var(--text);margin-top:4px}
+
+/* RESULT block */
+.result-block{display:none;margin-top:20px;padding-top:20px;border-top:1px solid var(--border)}
+.result-block.active{display:block}
+.result-header{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.result-dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+.result-title{font-weight:600}
+.result-bar{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;margin-top:12px}
+.dl-btn{
+  padding:11px 20px;border-radius:10px;
+  background:linear-gradient(135deg, var(--teal), #0d9488);
+  color:#fff;text-decoration:none;font-weight:600;font-size:0.9rem;
+  display:inline-flex;align-items:center;gap:8px;
+  transition:transform 0.2s, box-shadow 0.2s;
+}
+.dl-btn:hover{transform:translateY(-1px);box-shadow:0 6px 20px var(--teal-glow)}
+
+/* Before/After slider */
+.ba-slider{position:relative;overflow:hidden;border-radius:var(--radius-sm);cursor:ew-resize;user-select:none}
+.ba-slider img{display:block;max-width:100%;max-height:520px;margin:0 auto;pointer-events:none}
+.ba-after{position:absolute;top:0;left:0;height:100%;width:50%;overflow:hidden}
+.ba-after img{position:absolute;top:0;left:0;max-width:none;width:var(--ba-w,100%);height:100%;object-fit:contain}
+.ba-handle{position:absolute;top:0;bottom:0;left:50%;width:3px;background:var(--amber);transform:translateX(-50%);box-shadow:0 0 20px var(--amber-glow)}
+.ba-handle::after{
+  content:'⇔';position:absolute;top:50%;left:50%;
+  transform:translate(-50%,-50%);
+  width:36px;height:36px;border-radius:50%;
+  background:var(--amber);color:#000;font-weight:700;
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 4px 16px var(--amber-glow);
+}
+.ba-label{
+  position:absolute;top:12px;padding:4px 10px;border-radius:6px;
+  font-family:var(--mono);font-size:0.72rem;font-weight:600;letter-spacing:0.1em;
+  text-transform:uppercase;color:#fff;
+}
+.ba-label.before{left:12px;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px)}
+.ba-label.after{right:12px;background:var(--amber);color:#000}
+
+/* CONTROLS (right column) */
+.controls{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  padding:22px;position:sticky;top:96px;
+}
+@media (max-width:1024px){.controls{position:static}}
+
+.tabs{display:flex;gap:4px;background:var(--surface-2);border:1px solid var(--border);border-radius:11px;padding:4px;margin-bottom:20px}
+.tab{
+  flex:1;padding:9px 12px;border:none;background:transparent;
+  border-radius:8px;color:var(--text-dim);cursor:pointer;
+  font-family:var(--font);font-size:0.85rem;font-weight:500;transition:all 0.2s;
+  display:flex;align-items:center;justify-content:center;gap:6px;
+}
+.tab:hover{color:var(--text)}
+.tab.active{background:linear-gradient(135deg, var(--amber), #d97706);color:#fff;font-weight:600;box-shadow:0 4px 12px var(--amber-glow)}
+
+.panel{display:none}
+.panel.active{display:block}
+
+.form-group{margin-bottom:16px}
+.form-label{
+  display:block;font-size:0.82rem;color:var(--text-dim);
+  margin-bottom:6px;font-weight:500;
+}
+.form-input{
+  width:100%;padding:10px 14px;
+  background:var(--bg-2);border:1px solid var(--border);
+  border-radius:10px;color:var(--text);font-family:var(--font);font-size:0.9rem;
+  outline:none;transition:all 0.2s;
+}
+.form-input:focus{border-color:var(--amber);box-shadow:0 0 0 3px var(--amber-glow)}
+
+.row-2{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:end}
+.ratio-lock{
+  width:36px;height:36px;border-radius:9px;border:1px solid var(--border);
+  background:var(--bg-2);color:var(--text-dim);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  transition:all 0.2s;align-self:flex-end;margin-bottom:1px;
+  font-size:0.9rem;
+}
+.ratio-lock.active{background:var(--amber);color:#000;border-color:var(--amber)}
+.ratio-lock:hover{border-color:var(--amber)}
+
+.presets{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.preset{
+  padding:8px 6px;border-radius:8px;border:1px solid var(--border);
+  background:var(--bg-2);color:var(--text-dim);cursor:pointer;
+  font-family:var(--mono);font-size:0.75rem;font-weight:600;
+  transition:all 0.2s;
+}
+.preset:hover{color:var(--text);border-color:var(--border-hov)}
+.preset.active{background:var(--amber);color:#000;border-color:var(--amber)}
+
+.scale-buttons{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px}
+.scale-btn{
+  padding:14px 8px;border-radius:11px;border:1px solid var(--border);
+  background:var(--bg-2);cursor:pointer;
+  font-family:var(--font);transition:all 0.2s;color:var(--text);
+}
+.scale-btn:hover{border-color:var(--teal)}
+.scale-btn.active{background:linear-gradient(135deg, var(--teal), #0d9488);border-color:var(--teal);color:#fff;box-shadow:0 4px 14px var(--teal-glow)}
+.scale-btn-x{font-size:1.2rem;font-weight:700;letter-spacing:-0.02em}
+.scale-btn-hint{font-size:0.68rem;color:var(--text-muted);margin-top:2px}
+.scale-btn.active .scale-btn-hint{color:rgba(255,255,255,0.85)}
+
+.select{
+  width:100%;padding:10px 14px;
+  background:var(--bg-2);border:1px solid var(--border);
+  border-radius:10px;color:var(--text);font-family:var(--font);font-size:0.9rem;
+  outline:none;cursor:pointer;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238a9aad' stroke-width='2.5'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 12px center;
+  padding-right:36px;appearance:none;
+}
+.select:focus{border-color:var(--amber);box-shadow:0 0 0 3px var(--amber-glow)}
+
+.submit-btn{
+  width:100%;padding:14px;border-radius:11px;border:none;cursor:pointer;
+  font-family:var(--font);font-size:0.95rem;font-weight:600;
+  background:linear-gradient(135deg, var(--amber), #d97706);color:#fff;
+  margin-top:6px;transition:transform 0.2s, box-shadow 0.2s;
+  display:flex;align-items:center;justify-content:center;gap:8px;
+}
+.submit-btn.teal{background:linear-gradient(135deg, var(--teal), #0d9488)}
+.submit-btn:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 6px 20px var(--amber-glow)}
+.submit-btn.teal:hover:not(:disabled){box-shadow:0 6px 20px var(--teal-glow)}
+.submit-btn:disabled{opacity:0.5;cursor:not-allowed}
+
+.spinner{
+  width:18px;height:18px;border:2px solid rgba(255,255,255,0.3);
+  border-top-color:#fff;border-radius:50%;animation:spin 0.8s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+.hint{
+  font-size:0.78rem;color:var(--text-muted);line-height:1.5;
+  padding:10px 12px;background:var(--bg-2);border-radius:9px;border:1px solid var(--border);
+  margin-top:12px;
+}
+.hint b{color:var(--text-dim)}
+
+/* TOAST */
+.toast{
+  position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(100px);
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:11px;padding:12px 20px;
+  font-size:0.88rem;z-index:100;
+  opacity:0;transition:all 0.3s;
+  box-shadow:0 10px 40px rgba(0,0,0,0.4);
+}
+.toast.show{transform:translateX(-50%) translateY(0);opacity:1}
+.toast.error{border-color:var(--red);color:#fca5a5}
+
+/* FEATURES */
+.features{
+  display:grid;grid-template-columns:repeat(auto-fit, minmax(240px, 1fr));
+  gap:14px;margin-top:40px;
+}
+.feature{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius);padding:20px;
+  transition:border-color 0.2s;
+}
+.feature:hover{border-color:var(--border-hov)}
+.feature-icon{
+  width:42px;height:42px;border-radius:10px;
+  display:flex;align-items:center;justify-content:center;font-size:1.3rem;
+  margin-bottom:12px;
+  background:linear-gradient(135deg, rgba(245,158,11,0.15), rgba(20,184,166,0.1));
+  border:1px solid rgba(245,158,11,0.25);
+}
+.feature-title{font-size:1rem;font-weight:600;margin-bottom:6px}
+.feature-desc{font-size:0.85rem;color:var(--text-dim);line-height:1.55}
+
+footer{
+  padding:32px 0;border-top:1px solid var(--border);
+  text-align:center;color:var(--text-muted);font-size:0.82rem;
+  margin-top:40px;
+}
+footer a{color:var(--amber);text-decoration:none}
+footer a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="container nav">
+    <div class="brand" onclick="window.scrollTo({top:0,behavior:'smooth'})">
+      <div class="logo">🔍</div>
+      <div class="brand-text">
+        <div class="brand-name">PixScale</div>
+        <div class="brand-tag">AI · Resize · Upscale</div>
+      </div>
+    </div>
+    <div class="nav-right">
+      <a class="home-link" href="https://gornich.fun">← Gornich</a>
+    </div>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="container">
+    <h1>Меняй размер и <span>увеличивай разрешение</span><br>без потери качества</h1>
+    <p>AI super-resolution (EDSR/ESPCN/FSRCNN) для увеличения и высококачественный Lanczos для уменьшения. Всё в браузере, без регистрации.</p>
+    <div class="hero-chips">
+      <span class="hero-chip amber">AI ×2 · ×3 · ×4</span>
+      <span class="hero-chip teal">Lanczos resize</span>
+      <span class="hero-chip">PNG · JPG · WebP</span>
+      <span class="hero-chip">До 40 MB</span>
+    </div>
+  </div>
+</section>
+
+<main>
+  <div class="container">
+    <div class="app-grid">
+
+      <!-- LEFT: upload / preview -->
+      <div>
+        <div class="dropzone" id="dropzone">
+          <div class="dz-icon">🖼️</div>
+          <div class="dz-title">Перетащи изображение сюда</div>
+          <div class="dz-sub">или нажми на кнопку. JPG · PNG · WebP · BMP · TIFF</div>
+          <button class="dz-btn" id="pickBtn" type="button">Выбрать файл</button>
+          <input type="file" id="fileInput" accept="image/*" hidden>
+        </div>
+
+        <div class="preview" id="preview">
+          <div class="preview-header">
+            <div class="preview-filename" id="fileName">—</div>
+            <button class="preview-reset" id="resetBtn">✕ Сбросить</button>
+          </div>
+
+          <div class="preview-compare" id="previewCompare">
+            <img class="preview-img" id="previewImg" alt="">
+          </div>
+
+          <div class="preview-meta">
+            <div class="meta-cell"><div class="meta-label">Ширина</div><div class="meta-val" id="mW">—</div></div>
+            <div class="meta-cell"><div class="meta-label">Высота</div><div class="meta-val" id="mH">—</div></div>
+            <div class="meta-cell"><div class="meta-label">Пропорция</div><div class="meta-val" id="mR">—</div></div>
+            <div class="meta-cell"><div class="meta-label">Размер</div><div class="meta-val" id="mS">—</div></div>
+          </div>
+
+          <div class="result-block" id="resultBlock">
+            <div class="result-header">
+              <span class="result-dot"></span>
+              <span class="result-title" id="resultTitle">Готово</span>
+            </div>
+
+            <div class="ba-slider" id="baSlider" style="display:none">
+              <img id="baBefore" alt="before">
+              <div class="ba-after"><img id="baAfter" alt="after"></div>
+              <div class="ba-handle"></div>
+              <span class="ba-label before">Было</span>
+              <span class="ba-label after">Стало</span>
+            </div>
+
+            <div class="result-bar">
+              <div style="font-size:0.85rem;color:var(--text-dim)">
+                <span id="resDims"></span> · <span id="resSize"></span>
+              </div>
+              <a class="dl-btn" id="dlBtn" href="#" download>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Скачать
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT: controls -->
+      <aside class="controls">
+        <div class="tabs">
+          <button class="tab active" data-tab="resize">📐 Ресайз</button>
+          <button class="tab" data-tab="upscale">⚡ AI Upscale</button>
+        </div>
+
+        <!-- RESIZE PANEL -->
+        <div class="panel active" id="panel-resize">
+          <div class="form-group">
+            <label class="form-label">Размер в пикселях</label>
+            <div class="row-2">
+              <div>
+                <input type="number" class="form-input" id="rW" placeholder="Ширина" min="1" max="20000">
+              </div>
+              <button class="ratio-lock active" id="ratioLock" title="Сохранять пропорции">🔗</button>
+              <div>
+                <input type="number" class="form-input" id="rH" placeholder="Высота" min="1" max="20000">
+              </div>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Пропорции</label>
+            <div class="presets" id="ratioPresets">
+              <button class="preset" data-ratio="orig">Ориг.</button>
+              <button class="preset" data-ratio="1:1">1:1</button>
+              <button class="preset" data-ratio="4:3">4:3</button>
+              <button class="preset" data-ratio="3:2">3:2</button>
+              <button class="preset" data-ratio="16:9">16:9</button>
+              <button class="preset" data-ratio="9:16">9:16</button>
+              <button class="preset" data-ratio="21:9">21:9</button>
+              <button class="preset" data-ratio="2:3">2:3</button>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Процент от оригинала</label>
+            <div class="presets">
+              <button class="preset" data-pct="25">25%</button>
+              <button class="preset" data-pct="50">50%</button>
+              <button class="preset" data-pct="75">75%</button>
+              <button class="preset" data-pct="150">150%</button>
+              <button class="preset" data-pct="200">200%</button>
+              <button class="preset" data-pct="300">300%</button>
+              <button class="preset" data-pct="400">400%</button>
+              <button class="preset" data-pct="500">500%</button>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Алгоритм</label>
+            <select class="select" id="resample">
+              <option value="lanczos">Lanczos (лучшее качество)</option>
+              <option value="bicubic">Bicubic</option>
+              <option value="bilinear">Bilinear</option>
+              <option value="nearest">Nearest (пиксельный)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Формат вывода</label>
+            <select class="select" id="resizeFmt">
+              <option value="png">PNG (без потерь)</option>
+              <option value="jpg">JPG (меньше размер)</option>
+              <option value="webp">WebP</option>
+            </select>
+          </div>
+
+          <button class="submit-btn" id="resizeBtn" disabled>
+            <span>📐 Изменить размер</span>
+          </button>
+
+          <div class="hint">
+            <b>Lanczos</b> — золотой стандарт для уменьшения изображений. Для увеличения используй вкладку <b>AI Upscale</b>.
+          </div>
+        </div>
+
+        <!-- UPSCALE PANEL -->
+        <div class="panel" id="panel-upscale">
+          <div class="form-group">
+            <label class="form-label">Множитель увеличения</label>
+            <div class="scale-buttons">
+              <button class="scale-btn active" data-scale="2">
+                <div class="scale-btn-x">×2</div>
+                <div class="scale-btn-hint">быстро</div>
+              </button>
+              <button class="scale-btn" data-scale="3">
+                <div class="scale-btn-x">×3</div>
+                <div class="scale-btn-hint">средне</div>
+              </button>
+              <button class="scale-btn" data-scale="4">
+                <div class="scale-btn-x">×4</div>
+                <div class="scale-btn-hint">макс.</div>
+              </button>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">AI модель</label>
+            <select class="select" id="modelSel">
+              <option value="fsrcnn">FSRCNN · быстрый (5-15 сек)</option>
+              <option value="espcn">ESPCN · сбалансированный</option>
+              <option value="edsr">EDSR · лучшее качество (медленно)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Формат вывода</label>
+            <select class="select" id="upscaleFmt">
+              <option value="png">PNG (без потерь)</option>
+              <option value="jpg">JPG</option>
+              <option value="webp">WebP</option>
+            </select>
+          </div>
+
+          <div id="upscalePreview" style="font-size:0.85rem;color:var(--text-dim);padding:10px 12px;background:var(--bg-2);border:1px solid var(--border);border-radius:9px;margin-bottom:12px">
+            Загрузи файл, чтобы увидеть размер результата
+          </div>
+
+          <button class="submit-btn teal" id="upscaleBtn" disabled>
+            <span>⚡ Увеличить разрешение</span>
+          </button>
+
+          <div class="hint">
+            Super-resolution восстанавливает детали, которые обычный ресайз теряет. Для фото — <b>EDSR</b>, для быстрого — <b>FSRCNN</b>.
+          </div>
+        </div>
+      </aside>
+
+    </div>
+
+    <!-- FEATURES -->
+    <div class="features">
+      <div class="feature">
+        <div class="feature-icon">⚡</div>
+        <div class="feature-title">AI Super-Resolution</div>
+        <div class="feature-desc">Нейросети EDSR/ESPCN/FSRCNN восстанавливают детали при увеличении в ×2, ×3 или ×4 раза.</div>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">📐</div>
+        <div class="feature-title">Точный ресайз</div>
+        <div class="feature-desc">Произвольные размеры, процент, пропорции 16:9/4:3/1:1 и другие. Lanczos и Bicubic.</div>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">🎨</div>
+        <div class="feature-title">Все форматы</div>
+        <div class="feature-desc">На входе: JPG, PNG, WebP, BMP, TIFF. На выходе: PNG (без потерь), JPG, WebP.</div>
+      </div>
+      <div class="feature">
+        <div class="feature-icon">🔒</div>
+        <div class="feature-title">Файлы удаляются</div>
+        <div class="feature-desc">Все загрузки автоматически стираются с сервера через 1 час. Без регистрации.</div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="container">
+    PixScale &copy; 2026 &mdash; часть <a href="https://gornich.fun">Gornich</a>
+  </div>
+</footer>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+'use strict';
+
+// Elements
+var dz = document.getElementById('dropzone');
+var pickBtn = document.getElementById('pickBtn');
+var fileInput = document.getElementById('fileInput');
+var preview = document.getElementById('preview');
+var previewImg = document.getElementById('previewImg');
+var fileName = document.getElementById('fileName');
+var resetBtn = document.getElementById('resetBtn');
+var mW = document.getElementById('mW'), mH = document.getElementById('mH'),
+    mR = document.getElementById('mR'), mS = document.getElementById('mS');
+var tabs = document.querySelectorAll('.tab');
+var panels = { resize: document.getElementById('panel-resize'), upscale: document.getElementById('panel-upscale') };
+var rW = document.getElementById('rW'), rH = document.getElementById('rH');
+var ratioLock = document.getElementById('ratioLock');
+var ratioPresets = document.querySelectorAll('[data-ratio]');
+var pctPresets = document.querySelectorAll('[data-pct]');
+var resample = document.getElementById('resample');
+var resizeFmt = document.getElementById('resizeFmt');
+var resizeBtn = document.getElementById('resizeBtn');
+var scaleBtns = document.querySelectorAll('.scale-btn');
+var modelSel = document.getElementById('modelSel');
+var upscaleFmt = document.getElementById('upscaleFmt');
+var upscaleBtn = document.getElementById('upscaleBtn');
+var upscalePreview = document.getElementById('upscalePreview');
+var resultBlock = document.getElementById('resultBlock');
+var resultTitle = document.getElementById('resultTitle');
+var baSlider = document.getElementById('baSlider');
+var baBefore = document.getElementById('baBefore');
+var baAfter = document.getElementById('baAfter');
+var dlBtn = document.getElementById('dlBtn');
+var resDims = document.getElementById('resDims');
+var resSize = document.getElementById('resSize');
+var toast = document.getElementById('toast');
+
+// State
+var state = {
+  token: null, width: 0, height: 0, ratio: 1,
+  currentImgUrl: null, scale: 2, locked: true,
+};
+
+function showToast(msg, err){
+  toast.textContent = msg;
+  toast.classList.toggle('error', !!err);
+  toast.classList.add('show');
+  setTimeout(function(){ toast.classList.remove('show'); }, 3200);
+}
+function fmtBytes(n){
+  if(n<1024) return n+' B';
+  if(n<1024*1024) return (n/1024).toFixed(1)+' KB';
+  return (n/1024/1024).toFixed(2)+' MB';
+}
+function updateUpscalePreview(){
+  if(!state.token){ upscalePreview.textContent = 'Загрузи файл, чтобы увидеть размер результата'; return; }
+  var w = state.width * state.scale, h = state.height * state.scale;
+  upscalePreview.innerHTML = 'Результат: <b style="color:var(--text)">'+w+' × '+h+'</b> px ('+(w*h/1e6).toFixed(1)+' MP)';
+}
+
+/* ===== UPLOAD ===== */
+pickBtn.addEventListener('click', function(){ fileInput.click(); });
+fileInput.addEventListener('change', function(e){ if(e.target.files[0]) upload(e.target.files[0]); });
+
+['dragenter','dragover'].forEach(function(evt){
+  dz.addEventListener(evt, function(e){ e.preventDefault(); dz.classList.add('drag-over'); });
+});
+['dragleave','drop'].forEach(function(evt){
+  dz.addEventListener(evt, function(e){ e.preventDefault(); dz.classList.remove('drag-over'); });
+});
+dz.addEventListener('drop', function(e){
+  var f = e.dataTransfer.files[0];
+  if(f) upload(f);
+});
+
+function upload(file){
+  if(!file.type.startsWith('image/')){ showToast('Это не изображение', true); return; }
+  if(file.size > 40*1024*1024){ showToast('Файл больше 40 MB', true); return; }
+
+  var fd = new FormData();
+  fd.append('file', file);
+
+  dz.innerHTML = '<div class="spinner" style="border-color:rgba(245,158,11,0.3);border-top-color:var(--amber);width:42px;height:42px"></div><div class="dz-title">Загружаю…</div>';
+
+  fetch('/api/analyze', {method:'POST', body:fd})
+    .then(function(r){ if(!r.ok) return r.json().then(function(j){ throw new Error(j.detail||'upload failed'); }); return r.json(); })
+    .then(function(j){
+      state.token = j.token;
+      state.width = j.width; state.height = j.height; state.ratio = j.ratio;
+
+      // show preview
+      var reader = new FileReader();
+      reader.onload = function(ev){
+        previewImg.src = ev.target.result;
+        state.currentImgUrl = ev.target.result;
+        dz.style.display = 'none';
+        preview.classList.add('active');
+      };
+      reader.readAsDataURL(file);
+
+      fileName.textContent = file.name;
+      mW.textContent = j.width + ' px';
+      mH.textContent = j.height + ' px';
+      mR.textContent = j.ratio.toFixed(3);
+      mS.textContent = fmtBytes(j.size_bytes);
+
+      rW.value = j.width;
+      rH.value = j.height;
+      resizeBtn.disabled = false;
+      upscaleBtn.disabled = false;
+      updateUpscalePreview();
+
+      resultBlock.classList.remove('active');
+      baSlider.style.display = 'none';
+    })
+    .catch(function(e){ showToast(e.message, true); resetAll(); });
+}
+
+/* ===== RESET ===== */
+function resetAll(){
+  state.token = null;
+  preview.classList.remove('active');
+  resultBlock.classList.remove('active');
+  baSlider.style.display = 'none';
+  dz.style.display = 'flex';
+  dz.innerHTML = '<div class="dz-icon">🖼️</div><div class="dz-title">Перетащи изображение сюда</div><div class="dz-sub">или нажми на кнопку. JPG · PNG · WebP · BMP · TIFF</div><button class="dz-btn" id="pickBtn" type="button">Выбрать файл</button>';
+  document.getElementById('pickBtn').addEventListener('click', function(){ fileInput.click(); });
+  fileInput.value = '';
+  resizeBtn.disabled = true;
+  upscaleBtn.disabled = true;
+  rW.value = ''; rH.value = '';
+}
+resetBtn.addEventListener('click', resetAll);
+
+/* ===== TABS ===== */
+tabs.forEach(function(t){
+  t.addEventListener('click', function(){
+    tabs.forEach(function(x){ x.classList.remove('active'); });
+    this.classList.add('active');
+    var key = this.dataset.tab;
+    Object.keys(panels).forEach(function(k){ panels[k].classList.toggle('active', k===key); });
+  });
+});
+
+/* ===== RESIZE form ===== */
+ratioLock.addEventListener('click', function(){
+  state.locked = !state.locked;
+  this.classList.toggle('active', state.locked);
+});
+rW.addEventListener('input', function(){
+  if(state.locked && state.width){
+    var w = parseInt(this.value, 10);
+    if(w>0) rH.value = Math.round(w * state.height / state.width);
+  }
+});
+rH.addEventListener('input', function(){
+  if(state.locked && state.height){
+    var h = parseInt(this.value, 10);
+    if(h>0) rW.value = Math.round(h * state.width / state.height);
+  }
+});
+
+ratioPresets.forEach(function(p){
+  p.addEventListener('click', function(){
+    if(!state.width) return;
+    ratioPresets.forEach(function(x){ x.classList.remove('active'); });
+    this.classList.add('active');
+    var r = this.dataset.ratio;
+    if(r==='orig'){ rW.value = state.width; rH.value = state.height; return; }
+    var parts = r.split(':').map(Number);
+    var rat = parts[0]/parts[1];
+    // keep current width, set height to match ratio
+    var w = parseInt(rW.value,10) || state.width;
+    rH.value = Math.round(w / rat);
+  });
+});
+
+pctPresets.forEach(function(p){
+  p.addEventListener('click', function(){
+    if(!state.width) return;
+    pctPresets.forEach(function(x){ x.classList.remove('active'); });
+    this.classList.add('active');
+    var pct = parseInt(this.dataset.pct,10) / 100;
+    rW.value = Math.round(state.width * pct);
+    rH.value = Math.round(state.height * pct);
+  });
+});
+
+/* ===== UPSCALE form ===== */
+scaleBtns.forEach(function(b){
+  b.addEventListener('click', function(){
+    scaleBtns.forEach(function(x){ x.classList.remove('active'); });
+    this.classList.add('active');
+    state.scale = parseInt(this.dataset.scale, 10);
+    updateUpscalePreview();
+  });
+});
+
+/* ===== SUBMIT ===== */
+function setBusy(btn, busy, label){
+  btn.disabled = busy;
+  btn.innerHTML = busy
+    ? '<div class="spinner"></div><span>Обрабатываю…</span>'
+    : '<span>'+label+'</span>';
+}
+
+resizeBtn.addEventListener('click', function(){
+  if(!state.token) return;
+  var w = parseInt(rW.value,10), h = parseInt(rH.value,10);
+  if(!w || !h || w<1 || h<1){ showToast('Введи ширину и высоту', true); return; }
+
+  var fd = new FormData();
+  fd.append('token', state.token);
+  fd.append('width', w);
+  fd.append('height', h);
+  fd.append('keep_ratio', state.locked ? 'true' : 'false');
+  fd.append('fmt', resizeFmt.value);
+  fd.append('resample', resample.value);
+
+  setBusy(resizeBtn, true);
+  fetch('/api/resize', {method:'POST', body:fd})
+    .then(function(r){ if(!r.ok) return r.json().then(function(j){ throw new Error(j.detail||'resize failed'); }); return r.json(); })
+    .then(function(j){ showResult(j, 'Ресайз готов'); })
+    .catch(function(e){ showToast(e.message, true); })
+    .finally(function(){ setBusy(resizeBtn, false, '📐 Изменить размер'); });
+});
+
+upscaleBtn.addEventListener('click', function(){
+  if(!state.token) return;
+
+  var fd = new FormData();
+  fd.append('token', state.token);
+  fd.append('model', modelSel.value);
+  fd.append('scale', state.scale);
+  fd.append('fmt', upscaleFmt.value);
+
+  setBusy(upscaleBtn, true);
+  showToast('AI обрабатывает изображение, это займёт 5–60 секунд…');
+
+  fetch('/api/upscale', {method:'POST', body:fd})
+    .then(function(r){ if(!r.ok) return r.json().then(function(j){ throw new Error(j.detail||'upscale failed'); }); return r.json(); })
+    .then(function(j){ showResult(j, 'Увеличено ×'+j.scale+' ('+j.model.toUpperCase()+')'); })
+    .catch(function(e){ showToast(e.message, true); })
+    .finally(function(){ setBusy(upscaleBtn, false, '⚡ Увеличить разрешение'); });
+});
+
+/* ===== RESULT / BEFORE-AFTER SLIDER ===== */
+function showResult(j, title){
+  resultBlock.classList.add('active');
+  resultTitle.textContent = title;
+  resDims.textContent = j.width + ' × ' + j.height + ' px';
+  resSize.textContent = fmtBytes(j.size_bytes);
+  dlBtn.href = j.url;
+  dlBtn.setAttribute('download', j.file);
+
+  // Before/After slider
+  baBefore.src = state.currentImgUrl;
+  baAfter.src = j.url;
+  baSlider.style.display = 'block';
+
+  // reset handle
+  setHandle(0.5);
+}
+
+var handle = document.querySelector('.ba-handle');
+function setHandle(ratio){
+  ratio = Math.max(0, Math.min(1, ratio));
+  var pct = (ratio*100)+'%';
+  handle.style.left = pct;
+  baSlider.querySelector('.ba-after').style.width = pct;
+  // keep inner image aligned
+  var afterImg = baAfter;
+  if(afterImg) afterImg.style.width = (baSlider.clientWidth)+'px';
+}
+
+function onBaMove(e){
+  var rect = baSlider.getBoundingClientRect();
+  var x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+  setHandle(x / rect.width);
+}
+var dragging = false;
+baSlider.addEventListener('mousedown', function(e){ dragging = true; onBaMove(e); });
+window.addEventListener('mousemove', function(e){ if(dragging) onBaMove(e); });
+window.addEventListener('mouseup', function(){ dragging = false; });
+baSlider.addEventListener('touchstart', function(e){ dragging = true; onBaMove(e); }, {passive:true});
+baSlider.addEventListener('touchmove', function(e){ if(dragging) onBaMove(e); }, {passive:true});
+baSlider.addEventListener('touchend', function(){ dragging = false; });
+window.addEventListener('resize', function(){ setHandle(parseFloat(handle.style.left)/100 || 0.5); });
+
+})();
+</script>
+</body>
+</html>
