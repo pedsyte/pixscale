@@ -345,56 +345,80 @@ async def upscale_endpoint(
 @app.post("/api/enhance")
 async def enhance_endpoint(
     token: str = Form(...),
-    model: str = Form("fsrcnn"),   # fsrcnn | espcn | edsr
-    strength: str = Form("medium"),  # light (x2) | medium (x2→down) | strong (x4→down)
+    model: str = Form("fsrcnn"),        # fsrcnn | espcn  (для mode=ai)
+    strength: str = Form("medium"),     # sharpen | denoise | ai
     fmt: str = Form("png"),
     quality: int = Form(92),
 ):
     """Улучшить качество БЕЗ изменения размера.
 
-    Трюк: апскейлим SR-моделью, затем обратно даунскейлим Lanczos'ом.
-    SR восстанавливает детали/границы, даунскейл убирает шум и артефакты.
-    Эффект — тот же размер, но визуально чётче и чище.
+    Три режима (strength):
+      - sharpen : мягкая резкость (UnsharpMask). Быстро, для слегка мягких фото.
+      - denoise : сильный денойз + резкость (bilateral + UnsharpMask). Убирает
+                  зернистость/компрессию, потом добавляет чёткости.
+      - ai      : AI-восстановление (SR ×2 → Lanczos down → UnsharpMask).
+                  Честно помогает на реально низкокачественных / пиксельных.
     """
-    model = model.lower()
-    if model not in {"fsrcnn", "espcn", "edsr"}:
-        raise HTTPException(400, "invalid model")
-
-    # strength → через какой множитель прогоняем SR
-    sr_scale = {"light": 2, "medium": 2, "strong": 4}.get(strength, 2)
+    from PIL import ImageFilter
 
     img = _load_upload(token)
     orig_w, orig_h = img.size
 
-    # Защита: для strong (×4) на EDSR больших картинок — это будет безумно долго
-    if orig_w * orig_h > 8_000_000:  # 8 MP cap
+    if orig_w * orig_h > 12_000_000:
         raise HTTPException(
             413,
-            f"Для улучшения качества — макс. 8 MP ({orig_w}×{orig_h} = {orig_w*orig_h/1e6:.1f} MP). "
+            f"Для улучшения качества — макс. 12 MP ({orig_w}×{orig_h}). "
             f"Сначала уменьшите через вкладку 'Ресайз'.",
         )
 
-    bgr = _pil_to_bgr(img)
+    # Нормализуем режим
+    if strength not in ("sharpen", "denoise", "ai"):
+        # обратная совместимость со старыми значениями
+        strength = {"light": "sharpen", "medium": "denoise", "strong": "ai"}.get(strength, "denoise")
+
+    pil = img
+    if pil.mode not in ("RGB", "RGBA"):
+        pil = pil.convert("RGB")
 
     try:
-        up = _tiled_upsample(bgr, model, sr_scale)
-    except MemoryError:
-        raise HTTPException(507, "Не хватило памяти. Выберите FSRCNN.")
+        if strength == "sharpen":
+            result_pil = pil.filter(
+                ImageFilter.UnsharpMask(radius=1.2, percent=110, threshold=2)
+            )
+
+        elif strength == "denoise":
+            # Bilateral filter — сглаживает шум, сохраняя границы.
+            bgr = _pil_to_bgr(pil)
+            # sigmaColor/sigmaSpace среднеагрессивные, d=7 — быстро на CPU
+            denoised = cv2.bilateralFilter(bgr, d=7, sigmaColor=35, sigmaSpace=35)
+            rgb = cv2.cvtColor(denoised, cv2.COLOR_BGR2RGB)
+            tmp = Image.fromarray(rgb)
+            result_pil = tmp.filter(
+                ImageFilter.UnsharpMask(radius=1.5, percent=120, threshold=3)
+            )
+
+        else:  # ai
+            model = model.lower()
+            if model not in {"fsrcnn", "espcn"}:
+                model = "fsrcnn"
+            bgr = _pil_to_bgr(pil)
+            try:
+                up = _tiled_upsample(bgr, model, 2)
+            except MemoryError:
+                raise HTTPException(507, "Не хватило памяти.")
+            rgb = cv2.cvtColor(up, cv2.COLOR_BGR2RGB)
+            pil_up = Image.fromarray(rgb)
+            tmp = pil_up.resize((orig_w, orig_h), Image.Resampling.LANCZOS)
+            result_pil = tmp.filter(
+                ImageFilter.UnsharpMask(radius=1.0, percent=60, threshold=2)
+            )
+    except HTTPException:
+        raise
     except Exception as e:
         log.exception("enhance failed")
         raise HTTPException(500, f"enhance failed: {e}")
 
-    # Downscale обратно до оригинального размера — Lanczos
-    rgb = cv2.cvtColor(up, cv2.COLOR_BGR2RGB)
-    pil_up = Image.fromarray(rgb)
-    pil_down = pil_up.resize((orig_w, orig_h), Image.Resampling.LANCZOS)
-
-    # Чуть поднимаем резкость (unsharp mask), т.к. Lanczos мыльнит
-    from PIL import ImageFilter
-    if strength in ("medium", "strong"):
-        pil_down = pil_down.filter(ImageFilter.UnsharpMask(radius=1.0, percent=40, threshold=2))
-
-    final_bgr = _pil_to_bgr(pil_down)
+    final_bgr = _pil_to_bgr(result_pil)
     out = _save_output(final_bgr, fmt, quality)
     return {
         "ok": True,
@@ -403,9 +427,7 @@ async def enhance_endpoint(
         "width": orig_w,
         "height": orig_h,
         "size_bytes": out.stat().st_size,
-        "model": model,
-        "strength": strength,
-        "mode": "enhance",
+        "mode": strength,
     }
 
 

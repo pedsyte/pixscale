@@ -331,16 +331,21 @@ main{padding:32px 0 80px}
 .preset.active{background:var(--amber);color:#000;border-color:var(--amber)}
 
 .scale-buttons{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px}
-.scale-btn{
+.scale-btn,
+.strength-btn{
   padding:14px 8px;border-radius:11px;border:1px solid var(--border);
   background:var(--bg-2);cursor:pointer;
   font-family:var(--font);transition:all 0.2s;color:var(--text);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
 }
-.scale-btn:hover{border-color:var(--teal)}
-.scale-btn.active{background:linear-gradient(135deg, var(--teal), #0d9488);border-color:var(--teal);color:#fff;box-shadow:0 4px 14px var(--teal-glow)}
-.scale-btn-x{font-size:1.2rem;font-weight:700;letter-spacing:-0.02em}
+.scale-btn:hover,
+.strength-btn:hover{border-color:var(--teal)}
+.scale-btn.active,
+.strength-btn.active{background:linear-gradient(135deg, var(--teal), #0d9488);border-color:var(--teal);color:#fff;box-shadow:0 4px 14px var(--teal-glow)}
+.scale-btn-x{font-size:1.05rem;font-weight:700;letter-spacing:-0.01em;line-height:1.15}
 .scale-btn-hint{font-size:0.68rem;color:var(--text-muted);margin-top:2px}
-.scale-btn.active .scale-btn-hint{color:rgba(255,255,255,0.85)}
+.scale-btn.active .scale-btn-hint,
+.strength-btn.active .scale-btn-hint{color:rgba(255,255,255,0.85)}
 
 .select{
   width:100%;padding:10px 14px;
@@ -673,24 +678,24 @@ footer a:hover{text-decoration:underline}
           <!-- ENHANCE sub-panel -->
           <div class="ai-panel" id="ai-enhance" style="display:none">
             <div class="form-group">
-              <label class="form-label">Сила улучшения</label>
+              <label class="form-label">Режим улучшения</label>
               <div class="scale-buttons">
-                <button class="strength-btn" data-strength="light" type="button">
-                  <div class="scale-btn-x">Лайт</div>
-                  <div class="scale-btn-hint">мягко</div>
+                <button class="strength-btn active" data-strength="sharpen" type="button">
+                  <div class="scale-btn-x">Резкость</div>
+                  <div class="scale-btn-hint">мгновенно</div>
                 </button>
-                <button class="strength-btn active" data-strength="medium" type="button">
-                  <div class="scale-btn-x">Средне</div>
+                <button class="strength-btn" data-strength="denoise" type="button">
+                  <div class="scale-btn-x">Денойз</div>
                   <div class="scale-btn-hint">+резкость</div>
                 </button>
-                <button class="strength-btn" data-strength="strong" type="button">
-                  <div class="scale-btn-x">Мощно</div>
-                  <div class="scale-btn-hint">медленно</div>
+                <button class="strength-btn" data-strength="ai" type="button">
+                  <div class="scale-btn-x">AI</div>
+                  <div class="scale-btn-hint">нейросеть</div>
                 </button>
               </div>
             </div>
 
-            <div class="form-group">
+            <div class="form-group" id="enhanceModelGroup" style="display:none">
               <label class="form-label">AI модель</label>
               <select class="select" id="enhanceModelSel">
                 <option value="fsrcnn">FSRCNN · быстрый</option>
@@ -707,8 +712,8 @@ footer a:hover{text-decoration:underline}
               </select>
             </div>
 
-            <div style="font-size:0.85rem;color:var(--text-dim);padding:10px 12px;background:var(--bg-2);border:1px solid var(--border);border-radius:9px;margin-bottom:12px">
-              Размер <b style="color:var(--text)">останется тем же</b>. Нейросеть восстановит детали, уберёт шум и добавит резкости.
+            <div id="enhanceHint" style="font-size:0.85rem;color:var(--text-dim);padding:10px 12px;background:var(--bg-2);border:1px solid var(--border);border-radius:9px;margin-bottom:12px">
+              <b style="color:var(--text)">Резкость</b>: unsharp mask — делает границы чётче. Лучше всего для слегка мягких снимков.
             </div>
 
             <button class="submit-btn teal" id="enhanceBtn" disabled>
@@ -716,7 +721,7 @@ footer a:hover{text-decoration:underline}
             </button>
 
             <div class="hint">
-              Работает по схеме «AI-апскейл → даунскейл Lanczos'ом»: сеть восстанавливает детали, обратный ресайз убирает шум. Финал — то же разрешение, но чище и чётче.
+              Размер изображения не меняется. Для максимального увеличения реальных деталей — лучше сразу <b>AI Увеличение ×2</b> вместо Enhance.
             </div>
           </div>
         </div>
@@ -818,7 +823,7 @@ var strengthBtns = document.querySelectorAll('.strength-btn');
 // State
 var state = {
   token: null, width: 0, height: 0, ratio: 1,
-  currentImgUrl: null, scale: 2, strength: 'medium', locked: true,
+  currentImgUrl: null, scale: 2, strength: 'sharpen', locked: true,
 };
 
 function showToast(msg, err){
@@ -980,11 +985,20 @@ scaleBtns.forEach(function(b){
 });
 
 /* ===== ENHANCE form ===== */
+var enhanceModelGroup = document.getElementById('enhanceModelGroup');
+var enhanceHint = document.getElementById('enhanceHint');
+var HINTS = {
+  sharpen: '<b style="color:var(--text)">Резкость</b>: unsharp mask — делает границы чётче. Лучше всего для слегка мягких снимков.',
+  denoise: '<b style="color:var(--text)">Денойз + резкость</b>: bilateral-фильтр убирает шум/зернистость, затем добавляется резкость. Для фото с шумом и JPEG-артефактами.',
+  ai:      '<b style="color:var(--text)">AI-восстановление</b>: нейросеть прогоняет × 2 вверх и обратно — восстанавливает детали, но медленнее. Полезно для маленьких / пиксельных изображений.',
+};
 strengthBtns.forEach(function(b){
   b.addEventListener('click', function(){
     strengthBtns.forEach(function(x){ x.classList.remove('active'); });
     this.classList.add('active');
     state.strength = this.dataset.strength;
+    enhanceModelGroup.style.display = (state.strength === 'ai') ? '' : 'none';
+    enhanceHint.innerHTML = HINTS[state.strength] || '';
   });
 });
 
